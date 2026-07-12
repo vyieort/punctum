@@ -5,7 +5,8 @@
 // real table. The adapter depends only on a structural `Queryable`, so it works with a
 // node-postgres Pool in production and with PGlite in tests — no hard `pg` dependency here.
 
-import type { RowSource, RowSink, MappingRow, RowUpdate } from './tags.generate.js';
+import { runTagGeneration } from './tags.generate.js';
+import type { RowSource, RowSink, MappingRow, RowUpdate, TagRunSummary } from './tags.generate.js';
 
 /** Minimal query surface shared by node-postgres `Pool` and PGlite. */
 export interface Queryable {
@@ -73,4 +74,13 @@ export class PgRowSink implements RowSink {
       );
     }
   }
+}
+
+/** Run the tag job for one client against a Queryable (a pg Pool in prod, PGlite in tests). */
+export function runTagsJob(
+  db: Queryable,
+  clientId: string,
+  limit?: number,
+): Promise<TagRunSummary> {
+  return runTagGeneration(new PgRowSource(db, clientId), new PgRowSink(db, clientId), limit);
 }

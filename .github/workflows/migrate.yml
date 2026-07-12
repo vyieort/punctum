@@ -1,0 +1,22 @@
+name: Migrate
+
+# Applies pending db/migrations/*.sql to the database on push to main.
+# Inert until the DATABASE_URL repo secret is set — the script no-ops without it.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run migrate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}

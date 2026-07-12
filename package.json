@@ -11,14 +11,17 @@
     "start": "node --import tsx src/server.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "tags:parity": "node --import tsx src/cli/parity-report.ts"
+    "tags:parity": "node --import tsx src/cli/parity-report.ts",
+    "migrate": "node --import tsx scripts/migrate.ts"
   },
   "dependencies": {
+    "pg": "^8.11.0",
     "tsx": "^4.19.0"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.4",
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.0",
     "typescript": "^5.7.0"
   }
 }

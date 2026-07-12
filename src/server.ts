@@ -10,6 +10,8 @@
 
 import { createServer } from 'node:http';
 import { generateTags, type TagInputRow } from './lib/tagger.js';
+import { getPool } from './db/pool.js';
+import { runTagsJob, type Queryable } from './jobs/pg-rows.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -42,7 +44,7 @@ function sendJson(res: import('node:http').ServerResponse, status: number, body:
   res.end(payload);
 }
 
-const server = createServer((req, res) => {
+const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
   if (url.pathname === '/health') {
@@ -60,6 +62,21 @@ const server = createServer((req, res) => {
     return;
   }
 
+  if (url.pathname === '/jobs/tags/run') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    try {
+      const summary = await runTagsJob(getPool() as unknown as Queryable, client);
+      sendJson(res, 200, {
+        client,
+        groupsProcessed: summary.groupsProcessed,
+        rowsUpdated: summary.rowsUpdated,
+      });
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
   if (url.pathname === '/') {
     sendJson(res, 200, {
       service: 'punctum',
@@ -68,6 +85,7 @@ const server = createServer((req, res) => {
         'GET /health': 'liveness probe',
         'GET /tags':
           '/tags?vendor=BVLA&item=20g Seam Ring&variation=RG14K&variation=WG14K&variation=YG14K',
+        'POST /jobs/tags/run': '/jobs/tags/run?client=RE — tags PENDING catalog_mapping rows',
       },
     });
     return;
