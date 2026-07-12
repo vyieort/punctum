@@ -101,18 +101,16 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  // Review + approval UI over invoice_lines: /invoices/:id/{review,save,approve}
+  // Read-only review UI over invoice_lines: /invoices/:id/{review,approve,reject}
   const parts = url.pathname.split('/').filter(Boolean);
   if (parts[0] === 'invoices' && parts.length === 3) {
     const [, invoiceId, action] = parts;
     try {
-      const body = req.method === 'POST' ? await readBody(req) : '';
       const result = await handleReview(
         getPool() as unknown as Queryable,
         req.method ?? 'GET',
         invoiceId,
         action,
-        body,
       );
       res.writeHead(result.status, result.headers);
       res.end(result.body);

@@ -1,5 +1,5 @@
-// Review store: read an invoice + its lines, persist reviewer edits, and approve.
-// Works over any Queryable (pg Pool in prod, PGlite in tests).
+// Review store: read an invoice + its lines, and record the approve/reject decision.
+// Read-only review — no line editing. Works over any Queryable (pg Pool or PGlite).
 
 import type { Queryable } from '../jobs/pg-rows.js';
 
@@ -11,6 +11,7 @@ export interface InvoiceRow {
   invoice_date: string | null;
   total: string | null;
   status: string;
+  pdf_storage_path: string | null;
 }
 
 export interface InvoiceLineRow {
@@ -32,24 +33,6 @@ export interface InvoiceForReview {
   lines: InvoiceLineRow[];
 }
 
-export interface LineEdit {
-  id: string;
-  description?: string | null;
-  quantity?: string | null;
-  wholesale?: string | null;
-  gems?: string | null;
-  notes?: string | null;
-  synthetic_sku?: string | null;
-  is_product?: boolean;
-}
-
-const s = (v: unknown): string | null => (v == null ? null : String(v));
-const num = (v: unknown): number | null => {
-  if (v == null || v === '') return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-};
-
 // Drop trailing zeros from a numeric string for display (e.g. "3.000" -> "3").
 const trimZeros = (v: unknown): string | null => {
   if (v == null) return null;
@@ -63,7 +46,7 @@ export async function getInvoiceForReview(
 ): Promise<InvoiceForReview | null> {
   const inv = await db.query(
     `select id, client_id, vendor, invoice_number, invoice_date::text as invoice_date,
-            total::text as total, status
+            total::text as total, status, pdf_storage_path
        from invoices where id = $1`,
     [invoiceId],
   );
@@ -80,20 +63,13 @@ export async function getInvoiceForReview(
   };
 }
 
-export async function saveLineEdits(db: Queryable, invoiceId: string, edits: LineEdit[]): Promise<void> {
-  for (const e of edits) {
-    await db.query(
-      `update invoice_lines
-          set description = $1, quantity = $2, wholesale = $3, gems = $4, notes = $5,
-              synthetic_sku = $6, is_product = $7, review_status = 'edited'
-        where id = $8 and invoice_id = $9`,
-      [s(e.description), num(e.quantity), num(e.wholesale), s(e.gems), s(e.notes),
-       s(e.synthetic_sku), e.is_product ?? true, e.id, invoiceId],
-    );
-  }
-}
-
 export async function approveInvoice(db: Queryable, invoiceId: string): Promise<boolean> {
   const r = await db.query(`update invoices set status = 'approved' where id = $1 returning id`, [invoiceId]);
+  return r.rows.length > 0;
+}
+
+/** Reject = send the invoice back for re-parse (fix at the source, not by hand-editing). */
+export async function rejectInvoice(db: Queryable, invoiceId: string): Promise<boolean> {
+  const r = await db.query(`update invoices set status = 'needs_review' where id = $1 returning id`, [invoiceId]);
   return r.rows.length > 0;
 }
