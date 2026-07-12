@@ -1,0 +1,23 @@
+{
+  "name": "punctum",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Punctum — multi-tenant invoice → Square inventory automation service",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --import tsx src/server.ts",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "tags:parity": "node --import tsx src/cli/parity-report.ts"
+  },
+  "dependencies": {
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

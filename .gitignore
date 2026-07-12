@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+.DS_Store
+
+# Derived from the (uncommitted) production mapping xlsx. Regenerate with
+# `npm run tags:parity`. Only tests/golden/groups.json (the frozen suite) is committed.
+tests/golden/_*.json
+
+# Delivery artifacts (git bundles of this repo) — not source.
+*.bundle
