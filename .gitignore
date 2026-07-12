@@ -11,3 +11,7 @@ tests/golden/_*.json
 
 # Delivery artifacts (git bundles of this repo) — not source.
 *.bundle
+
+# Client data: generated seeds + source spreadsheets (not committed)
+db/seed/*.sql
+*.xlsx
