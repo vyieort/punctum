@@ -12,6 +12,7 @@ import { createServer } from 'node:http';
 import { generateTags, type TagInputRow } from './lib/tagger.js';
 import { getPool } from './db/pool.js';
 import { runTagsJob, type Queryable } from './jobs/pg-rows.js';
+import { handleReview } from './review/handler.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -42,6 +43,15 @@ function sendJson(res: import('node:http').ServerResponse, status: number, body:
   const payload = JSON.stringify(body, null, 2);
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   res.end(payload);
+}
+
+function readBody(req: import('node:http').IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (c) => (data += c));
+    req.on('end', () => resolve(data));
+    req.on('error', reject);
+  });
 }
 
 const server = createServer(async (req, res) => {
@@ -88,6 +98,27 @@ const server = createServer(async (req, res) => {
         'POST /jobs/tags/run': '/jobs/tags/run?client=RE — tags PENDING catalog_mapping rows',
       },
     });
+    return;
+  }
+
+  // Review + approval UI over invoice_lines: /invoices/:id/{review,save,approve}
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts[0] === 'invoices' && parts.length === 3) {
+    const [, invoiceId, action] = parts;
+    try {
+      const body = req.method === 'POST' ? await readBody(req) : '';
+      const result = await handleReview(
+        getPool() as unknown as Queryable,
+        req.method ?? 'GET',
+        invoiceId,
+        action,
+        body,
+      );
+      res.writeHead(result.status, result.headers);
+      res.end(result.body);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
     return;
   }
 
