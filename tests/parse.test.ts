@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseExtraction, extractJson } from '../src/lib/parse.js';
+import { parseExtraction, extractJson, parseInvoiceLines } from '../src/lib/parse.js';
 import { fillSkus } from '../src/lib/sku.js';
 
 const INV = {
@@ -60,4 +60,12 @@ test('parse -> fillSkus composes (Sc1 module 13 -> module 32)', () => {
   const withSkus = fillSkus(r.vendor_name, r.products);
   assert.equal(withSkus[0]!.sku, '16-1468-300-20-R14K'); // real SKU preserved
   assert.equal(withSkus[1]!.sku, 'BVLA-BAL-END-TI-4MM'); // blank SKU generated
+});
+
+test('parseInvoiceLines keeps ALL line items (products + non-products) for review', () => {
+  const r = parseInvoiceLines('```json\n' + J + '\n```');
+  assert.equal(r.line_items.length, 3); // Shipping retained, not dropped
+  assert.equal(r.line_items.filter((i) => i.is_product).length, 2);
+  assert.equal(r.vendor_name, 'BVLA');
+  assert.equal(r.invoice_total, 214.5);
 });

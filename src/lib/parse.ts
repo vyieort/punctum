@@ -86,3 +86,46 @@ export function parseExtraction(claudeResponse: string): ParsedInvoice {
     products,
   };
 }
+
+export interface InvoiceExtraction {
+  vendor_name: string;
+  invoice_number: string;
+  invoice_date: string;
+  invoice_total: number;
+  line_items: ExtractedLineItem[];
+}
+
+/**
+ * Parse the extraction into ALL line items (products AND non-products), for the pipeline.
+ *
+ * Unlike parseExtraction — the faithful Sc1 module-13 port, which drops non-products at
+ * parse time — this keeps every line so the review page can surface a real product the
+ * model wrongly flagged is_product:false. The is_product filter therefore moves downstream
+ * to the import step, where non-products are excluded from the Square push.
+ */
+export function parseInvoiceLines(claudeResponse: string): InvoiceExtraction {
+  let parsed: {
+    line_items?: ExtractedLineItem[];
+    vendor_name?: string;
+    invoice_number?: string;
+    invoice_date?: string;
+    invoice_total?: number;
+  };
+  try {
+    parsed = JSON.parse(extractJson(claudeResponse));
+  } catch (e) {
+    throw new Error(
+      'Punctum parse failed: ' + (e as Error).message + ' | starts: ' + String(claudeResponse || '').slice(0, 200),
+    );
+  }
+  if (!parsed.line_items) {
+    throw new Error('Punctum parse: missing line_items for invoice ' + (parsed.invoice_number || '(unknown)'));
+  }
+  return {
+    vendor_name: parsed.vendor_name || '',
+    invoice_number: parsed.invoice_number || '',
+    invoice_date: parsed.invoice_date || '',
+    invoice_total: parsed.invoice_total || 0,
+    line_items: parsed.line_items,
+  };
+}
