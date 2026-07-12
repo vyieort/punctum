@@ -17,7 +17,8 @@ export function getPool(): DbPool {
     if (!connectionString) {
       throw new Error('DATABASE_URL is not set');
     }
-    pool = new Pool({ connectionString });
+    // Fail fast with a clear error instead of hanging if the DB is unreachable.
+    pool = new Pool({ connectionString, connectionTimeoutMillis: 10_000 });
   }
   return pool;
 }
