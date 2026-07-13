@@ -52,6 +52,20 @@ test('reject sends the invoice back to needs_review', async () => {
   assert.equal((await getInvoiceForReview(q, INV))!.invoice.status, 'needs_review');
 });
 
+test('backorder column shows only when a line is actually backordered', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  // demo lines have no backorder -> no column
+  let out = renderReviewPage((await getInvoiceForReview(q, INV))!);
+  assert.doesNotMatch(out, /Back order/);
+  // add a backordered line -> column appears
+  await db.exec(`insert into invoice_lines (invoice_id, line_no, description, quantity, wholesale, is_product, backorder)
+    values ('${INV}', 3, 'Backordered Ring', 1, 99.00, true, true)`);
+  out = renderReviewPage((await getInvoiceForReview(q, INV))!);
+  assert.match(out, /Back order/);
+  assert.match(out, />Yes</);
+});
+
 test('unknown invoice returns 404', async () => {
   const db = await seeded();
   const r = await handleReview(db as unknown as Queryable, 'GET', '11111111-1111-1111-1111-111111111111', 'review');

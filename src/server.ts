@@ -14,6 +14,7 @@ import { getPool } from './db/pool.js';
 import { runTagsJob, type Queryable } from './jobs/pg-rows.js';
 import { handleReview } from './review/handler.js';
 import { ingestInvoice } from './jobs/intake.js';
+import { squareConfigFromEnv, listLocations } from './lib/square-client.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -137,6 +138,18 @@ const server = createServer(async (req, res) => {
         'GET /invoices/:id/review': 'read-only review + approve/reject',
       },
     });
+    return;
+  }
+
+  // Read-only credential check: confirm the Square token + host reach the sandbox.
+  if (url.pathname === '/square/verify' && req.method === 'GET') {
+    try {
+      const cfg = squareConfigFromEnv();
+      const locations = await listLocations(cfg);
+      sendJson(res, 200, { env: cfg.env, configuredLocationId: cfg.locationId, locations });
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
     return;
   }
 

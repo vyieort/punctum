@@ -18,6 +18,8 @@ export function renderReviewPage(data: InvoiceForReview): string {
   const statusClass =
     status === 'approved' ? ' approved' : status === 'needs_review' ? ' rejected' : '';
 
+  // Backorder is empty on most invoices; only surface the column when one line has it.
+  const showBackorder = lines.some((l) => l.backorder);
   const rows = lines
     .map(
       (l) => `<tr>
@@ -28,6 +30,7 @@ export function renderReviewPage(data: InvoiceForReview): string {
       <td>${esc(l.gems)}</td>
       <td>${esc(l.notes)}</td>
       <td>${esc(l.synthetic_sku)}</td>
+      ${showBackorder ? `<td class="ctr">${l.backorder ? 'Yes' : '&mdash;'}</td>` : ''}
       <td class="ctr">${l.is_product ? '&#10003;' : '&mdash;'}</td>
     </tr>`,
     )
@@ -69,7 +72,7 @@ export function renderReviewPage(data: InvoiceForReview): string {
     <div class="panel">${pdfPanel}</div>
     <div class="panel">
       <table>
-        <thead><tr><th>#</th><th>Description</th><th>Qty</th><th>Wholesale</th><th>Gems</th><th>Notes</th><th>SKU</th><th>Product?</th></tr></thead>
+        <thead><tr><th>#</th><th>Description</th><th>Qty</th><th>Wholesale</th><th>Gems</th><th>Notes</th><th>SKU</th>${showBackorder ? '<th>Back order</th>' : ''}<th>Product?</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
       <div class="actions">
