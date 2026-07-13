@@ -123,7 +123,11 @@ export interface CompareDeps {
 }
 
 export async function runComparison(pdfBase64: string, deps: CompareDeps = {}): Promise<InvoiceComparison> {
-  const two = await (deps.twoPass ?? twoPassClassify)(pdfBase64, deps.anthropic);
-  const one = await (deps.onePass ?? extractAndClassify)(pdfBase64, deps.anthropic);
+  // Run the two pipelines concurrently so the wall-clock is ~max(2-pass, 1-pass), not the
+  // sum — keeps the request under Railway's gateway timeout.
+  const [two, one] = await Promise.all([
+    (deps.twoPass ?? twoPassClassify)(pdfBase64, deps.anthropic),
+    (deps.onePass ?? extractAndClassify)(pdfBase64, deps.anthropic),
+  ]);
   return compareClassifications(two, one);
 }
