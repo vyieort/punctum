@@ -46,7 +46,9 @@ export interface InvoiceComparison {
   unmatched: { twoPassOnly: string[]; onePassOnly: string[] };
 }
 
-const s = (v: unknown): string => String(v ?? '').trim();
+// Normalize for comparison: inch/foot marks (″ U+2033, ′ U+2032) are cosmetic variants of
+// " and ' — same measurement. Treat them as equal so they don't flag as catalog diffs.
+const s = (v: unknown): string => String(v ?? '').trim().replace(/″/g, '"').replace(/′/g, "'");
 const isProduct = (i: ClassifiedItem): boolean => i.is_product !== false;
 
 function diffFields(a: ClassifiedItem, b: ClassifiedItem, fields: readonly string[]): FieldDiff[] {
@@ -57,44 +59,61 @@ function diffFields(a: ClassifiedItem, b: ClassifiedItem, fields: readonly strin
   return out;
 }
 
+// Group items by SKU, preserving order. Gem-pairing produces several line items that share
+// one parent SKU (same setting, different accent gem), so a SKU maps to a LIST, not one item.
+function groupBySku(items: ClassifiedItem[]): Map<string, ClassifiedItem[]> {
+  const m = new Map<string, ClassifiedItem[]>();
+  for (const it of items) {
+    const k = s(it.sku);
+    if (!k) continue;
+    const arr = m.get(k);
+    if (arr) arr.push(it);
+    else m.set(k, [it]);
+  }
+  return m;
+}
+
 export function compareClassifications(twoPass: ClassifiedItem[], onePass: ClassifiedItem[]): InvoiceComparison {
   const two = twoPass.filter(isProduct);
   const one = onePass.filter(isProduct);
+  const twoBy = groupBySku(two);
+  const oneBy = groupBySku(one);
 
-  const oneBySku = new Map<string, ClassifiedItem>();
-  for (const it of one) {
-    const k = s(it.sku);
-    if (k) oneBySku.set(k, it);
-  }
-
-  const matchedSkus = new Set<string>();
   const lines: LineComparison[] = [];
+  const twoPassOnly: string[] = [];
+  const onePassOnly: string[] = [];
+  let matched = 0;
   let criticalAgree = 0;
 
-  for (const a of two) {
-    const k = s(a.sku);
-    const b = k ? oneBySku.get(k) : undefined;
-    if (!b) continue;
-    matchedSkus.add(k);
-    const critical = diffFields(a, b, CRITICAL_FIELDS);
-    const supporting = diffFields(a, b, SUPPORTING_FIELDS);
-    if (critical.length === 0) criticalAgree++;
-    if (critical.length || supporting.length) lines.push({ sku: k, description: s(a.description), critical, supporting });
+  for (const [sku, twoItems] of twoBy) {
+    const oneItems = oneBy.get(sku) ?? [];
+    const n = Math.min(twoItems.length, oneItems.length);
+    for (let i = 0; i < n; i++) {
+      matched++;
+      const a = twoItems[i]!;
+      const b = oneItems[i]!;
+      const critical = diffFields(a, b, CRITICAL_FIELDS);
+      const supporting = diffFields(a, b, SUPPORTING_FIELDS);
+      if (critical.length === 0) criticalAgree++;
+      if (critical.length || supporting.length) lines.push({ sku, description: s(a.description), critical, supporting });
+    }
+    for (let i = n; i < twoItems.length; i++) twoPassOnly.push(sku);
+    for (let i = n; i < oneItems.length; i++) onePassOnly.push(sku);
+  }
+  for (const [sku, oneItems] of oneBy) {
+    if (!twoBy.has(sku)) for (let i = 0; i < oneItems.length; i++) onePassOnly.push(sku);
   }
 
   // Surface the catalog-output disagreements first.
   lines.sort((x, y) => y.critical.length - x.critical.length);
 
-  const twoSkus = new Set(two.map((a) => s(a.sku)).filter(Boolean));
-  const oneSkus = new Set(one.map((a) => s(a.sku)).filter(Boolean));
-
   return {
     products: { twoPass: two.length, onePass: one.length },
-    matched: matchedSkus.size,
+    matched,
     criticalAgree,
-    criticalDiffer: matchedSkus.size - criticalAgree,
+    criticalDiffer: matched - criticalAgree,
     lines,
-    unmatched: { twoPassOnly: [...twoSkus].filter((k) => !oneSkus.has(k)), onePassOnly: [...oneSkus].filter((k) => !twoSkus.has(k)) },
+    unmatched: { twoPassOnly, onePassOnly },
   };
 }
 

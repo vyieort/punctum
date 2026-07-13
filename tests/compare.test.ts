@@ -42,6 +42,31 @@ test('a supporting-only diff (gauge) is still a critical AGREEMENT (the key fix)
   assert.equal(r.lines[0]!.supporting[0]!.field, 'gauge');
 });
 
+test('inch-mark variants (″ vs ") are treated as equal, not a diff', () => {
+  const a = [ci({ sku: 'S1', variation_name: '3/8″ High Polish' })];
+  const b = [ci({ sku: 'S1', variation_name: '3/8" High Polish' })];
+  const r = compareClassifications(a, b);
+  assert.equal(r.criticalAgree, 1);
+  assert.equal(r.lines.length, 0);
+});
+
+test('repeated SKUs (gem-pairing) are paired by order, not collapsed', () => {
+  const two = [ci({ sku: 'GB', variation_name: 'Champagne' }), ci({ sku: 'GB', variation_name: 'Aquamarine' })];
+  const one = [ci({ sku: 'GB', variation_name: 'Champagne' }), ci({ sku: 'GB', variation_name: 'Aquamarine' })];
+  const r = compareClassifications(two, one);
+  assert.equal(r.matched, 2); // both paired, not collapsed to a single SKU
+  assert.equal(r.criticalAgree, 2);
+  assert.equal(r.lines.length, 0);
+});
+
+test('a SKU with more items on one side reports the extras as unmatched', () => {
+  const two = [ci({ sku: 'GB', variation_name: 'A' }), ci({ sku: 'GB', variation_name: 'B' })];
+  const one = [ci({ sku: 'GB', variation_name: 'A' })];
+  const r = compareClassifications(two, one);
+  assert.equal(r.matched, 1);
+  assert.deepEqual(r.unmatched.twoPassOnly, ['GB']);
+});
+
 test('unmatched SKUs reported; non-products excluded', () => {
   const a = [ci({ sku: 'S1' }), ci({ sku: 'ONLYA' }), ci({ sku: 'SHIP', is_product: false })];
   const b = [ci({ sku: 'S1' }), ci({ sku: 'ONLYB' })];
