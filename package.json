@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node --import tsx src/server.ts",
-    "test": "node --import tsx --test tests/*.test.ts",
+    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "tags:parity": "node --import tsx src/cli/parity-report.ts",
     "migrate": "node --import tsx scripts/migrate.ts"

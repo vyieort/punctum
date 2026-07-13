@@ -71,6 +71,22 @@ export async function upsertCatalogObject(cfg: SquareConfig, body: unknown): Pro
   return squareRequest(cfg, '/v2/catalog/object', { method: 'POST', body });
 }
 
+/** Create a catalog CATEGORY (top-level, or nested under parentId). Returns its new id. */
+export async function createCategory(
+  cfg: SquareConfig,
+  opts: { name: string; parentId?: string | null },
+): Promise<string> {
+  const category_data: Record<string, unknown> = { name: opts.name };
+  if (opts.parentId) category_data.parent_category = { id: opts.parentId };
+  else category_data.is_top_level = true;
+
+  const j = await upsertCatalogObject(cfg, {
+    idempotency_key: `cat-${opts.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    object: { type: 'CATEGORY', id: '#cat', category_data },
+  });
+  return (j.catalog_object?.id ?? j.id) as string;
+}
+
 export async function batchChangeInventory(cfg: SquareConfig, body: unknown): Promise<any> {
   return squareRequest(cfg, '/v2/inventory/changes/batch-create', { method: 'POST', body });
 }

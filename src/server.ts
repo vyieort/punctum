@@ -16,6 +16,7 @@ import { handleReview } from './review/handler.js';
 import { ingestInvoice } from './jobs/intake.js';
 import { squareConfigFromEnv, listLocations } from './lib/square-client.js';
 import { previewInvoiceImport } from './jobs/import-preview.js';
+import { provisionCategories } from './jobs/provision-categories.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -153,6 +154,19 @@ const server = createServer(async (req, res) => {
     try {
       const preview = await previewInvoiceImport(getPool() as unknown as Queryable, client, invoiceId);
       sendJson(res, 200, preview);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  // One-time: create the category tree in the (sandbox) Square account + re-seed category_map.
+  // POST because it writes to Square. Run once against an empty account.
+  if (url.pathname === '/jobs/categories/provision' && req.method === 'POST') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    try {
+      const result = await provisionCategories(squareConfigFromEnv(), getPool() as unknown as Queryable, client);
+      sendJson(res, 200, { client, created: result.created });
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }
