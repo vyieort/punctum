@@ -154,7 +154,7 @@ async function run(){
   var f=el.files[0]; b.disabled=true; o.textContent=''; s.textContent='Running both pipelines on '+f.name+' — up to ~90s…';
   try{
     var buf=await f.arrayBuffer();
-    var res=await fetch('/compare',{method:'POST',headers:{'content-type':'application/pdf'},body:buf});
+    var res=await fetch('/compare?filename='+encodeURIComponent(f.name),{method:'POST',headers:{'content-type':'application/pdf'},body:buf});
     var j=await res.json();
     if(res.ok){ s.textContent='Done — '+j.matched+' matched, '+j.agreements+' agree, '+j.disagreements+' differ ('+j.unmatched.twoPassOnly.length+'/'+j.unmatched.onePassOnly.length+' unmatched).'; o.textContent=JSON.stringify(j,null,2); }
     else { s.textContent='Error: '+(j.error||res.status); }
@@ -244,8 +244,9 @@ const server = createServer(async (req, res) => {
           sendJson(res, 400, { error: 'empty upload' });
           return;
         }
+        const filename = url.searchParams.get('filename') ?? undefined;
         const result = await runComparison(pdf.toString('base64'));
-        sendJson(res, 200, result);
+        sendJson(res, 200, { file: filename, ...result });
       } catch (err) {
         sendJson(res, 500, { error: (err as Error).message });
       }
