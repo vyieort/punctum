@@ -15,6 +15,7 @@ import { runTagsJob, type Queryable } from './jobs/pg-rows.js';
 import { handleReview } from './review/handler.js';
 import { ingestInvoice } from './jobs/intake.js';
 import { squareConfigFromEnv, listLocations } from './lib/square-client.js';
+import { previewInvoiceImport } from './jobs/import-preview.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -141,12 +142,35 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // Import dry-run: show exactly what an approved invoice WOULD push to Square (no writes).
+  if (url.pathname === '/jobs/import/preview') {
+    const invoiceId = url.searchParams.get('invoice');
+    const client = url.searchParams.get('client') ?? 'RE';
+    if (!invoiceId) {
+      sendJson(res, 400, { error: "missing required query param: 'invoice'" });
+      return;
+    }
+    try {
+      const preview = await previewInvoiceImport(getPool() as unknown as Queryable, client, invoiceId);
+      sendJson(res, 200, preview);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
   // Read-only credential check: confirm the Square token + host reach the sandbox.
   if (url.pathname === '/square/verify' && req.method === 'GET') {
     try {
       const cfg = squareConfigFromEnv();
       const locations = await listLocations(cfg);
-      sendJson(res, 200, { env: cfg.env, configuredLocationId: cfg.locationId, locations });
+      const configuredLocationValid = locations.some((l) => l.id === cfg.locationId);
+      sendJson(res, 200, {
+        env: cfg.env,
+        configuredLocationId: cfg.locationId,
+        configuredLocationValid,
+        locations,
+      });
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }
