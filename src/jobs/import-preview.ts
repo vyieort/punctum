@@ -1,11 +1,10 @@
-// Import dry-run: run the full chain (classify -> price/categorize -> group -> payloads)
-// on an approved invoice and return what WOULD be sent to Square. Reads the DB and calls
-// the classifier (Claude), but makes zero Square calls — a safe pre-flight.
+// Import dry-run: show exactly what an approved invoice WOULD send to Square. Reads the
+// stored classification (written at intake) — NO AI call — applies pricing + categories,
+// groups into items, and builds a sample payload. Makes zero Square calls.
 
 import type { Queryable } from './pg-rows.js';
 import type { PricingRules } from '../lib/pricing.js';
-import { classifyLines, type ClassifiedItem, type ClassifierLineInput } from '../lib/classify.js';
-import type { AnthropicOptions } from '../lib/anthropic.js';
+import type { ClassifiedItem } from '../lib/classify.js';
 import { toImportLines } from '../lib/import-map.js';
 import { planItems, createItemBody } from '../lib/square.js';
 
@@ -28,31 +27,19 @@ export async function loadCategoryMap(db: Queryable, clientId: string): Promise<
   return m;
 }
 
-async function loadInvoiceLines(
-  db: Queryable,
-  invoiceId: string,
-): Promise<{ vendor: string; lines: ClassifierLineInput[] }> {
+/** The stored classification for an invoice's PRODUCT lines (non-products excluded). */
+async function loadClassifiedProducts(db: Queryable, invoiceId: string): Promise<{ vendor: string; items: ClassifiedItem[] }> {
   const inv = await db.query(`select vendor from invoices where id = $1`, [invoiceId]);
   if (inv.rows.length === 0) throw new Error(`invoice ${invoiceId} not found`);
   const vendor = String((inv.rows[0] as { vendor: string | null }).vendor ?? '');
   const l = await db.query(
-    `select synthetic_sku, description, quantity::text as quantity, wholesale::text as wholesale,
-            gems, notes, is_product
-       from invoice_lines where invoice_id = $1 order by line_no nulls last, created_at`,
+    `select classification, is_product from invoice_lines where invoice_id = $1 order by line_no nulls last, created_at`,
     [invoiceId],
   );
-  const lines = (l.rows as Array<Record<string, unknown>>)
+  const items = (l.rows as Array<{ classification: unknown; is_product: boolean }>)
     .filter((r) => r.is_product !== false)
-    .map((r) => ({
-      vendor,
-      sku: String(r.synthetic_sku ?? ''),
-      description: String(r.description ?? ''),
-      qty: String(r.quantity ?? ''),
-      price: String(r.wholesale ?? ''),
-      gems: String(r.gems ?? ''),
-      notes: String(r.notes ?? ''),
-    }));
-  return { vendor, lines };
+    .map((r) => (typeof r.classification === 'string' ? JSON.parse(r.classification) : r.classification) as ClassifiedItem);
+  return { vendor, items };
 }
 
 export interface ImportPreview {
@@ -67,33 +54,23 @@ export interface ImportPreview {
     category_ids: string[];
     variations: Array<{ variation_name: string; sku: string; price: string; qty: number }>;
   }>;
-  samplePayload: unknown; // the createItemBody for the first item, exactly as it would be sent
+  samplePayload: unknown;
 }
 
-export type Classifier = (lines: ClassifierLineInput[], opts?: AnthropicOptions) => Promise<ClassifiedItem[]>;
-
-export async function previewInvoiceImport(
-  db: Queryable,
-  clientId: string,
-  invoiceId: string,
-  opts: { classify?: Classifier; anthropic?: AnthropicOptions } = {},
-): Promise<ImportPreview> {
-  const [{ vendor, lines }, pricingRules, categoryMap] = await Promise.all([
-    loadInvoiceLines(db, invoiceId),
+export async function previewInvoiceImport(db: Queryable, clientId: string, invoiceId: string): Promise<ImportPreview> {
+  const [{ vendor, items }, pricingRules, categoryMap] = await Promise.all([
+    loadClassifiedProducts(db, invoiceId),
     loadPricingRules(db, clientId),
     loadCategoryMap(db, clientId),
   ]);
 
-  const classify = opts.classify ?? classifyLines;
-  const classified = await classify(lines, opts.anthropic);
-
-  const { lines: importLines, skipped, flaggedItemNames } = toImportLines(classified, { pricingRules, categoryMap });
+  const { lines: importLines, skipped, flaggedItemNames } = toImportLines(items, { pricingRules, categoryMap });
   const planned = planItems(importLines);
 
   return {
     invoiceId,
     vendor,
-    productLines: lines.length,
+    productLines: items.length,
     itemCount: planned.length,
     skipped,
     flaggedItemNames,

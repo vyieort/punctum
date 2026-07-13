@@ -1,17 +1,17 @@
-// Invoice intake (W1). Port of the Sc1 pipeline's write side, retargeted from Google
-// Sheets to Postgres: extract a PDF with Claude, parse ALL line items, fill blank SKUs,
-// and write one `invoices` row + one `invoice_lines` row per line, landing in 'in_review'
-// so it appears on the review page.
+// Invoice intake (W1), single-pass. One Claude call extracts AND classifies the PDF; we
+// fill blank SKUs, write one `invoices` row + one `invoice_lines` row per line (landing in
+// 'in_review'), and store each line's classification so the import needs no further AI.
 //
-// The extractor is injected (defaults to the live Anthropic call) so this whole flow is
-// unit-testable with a canned extraction and no API key.
+// The extractor is injected (defaults to the live merged call) so this flow is unit-testable
+// with a canned invoice and no API key.
 
 import type { Queryable } from './pg-rows.js';
-import { parseInvoiceLines, type ExtractedLineItem } from '../lib/parse.js';
 import { fillSkus } from '../lib/sku.js';
-import { extractInvoiceText } from '../lib/anthropic.js';
+import { extractAndClassify, type MergedInvoice } from '../lib/merged.js';
+import type { ClassifiedItem } from '../lib/classify.js';
+import type { AnthropicOptions } from '../lib/anthropic.js';
 
-export type Extractor = (pdfBase64: string) => Promise<string>;
+export type Extractor = (pdfBase64: string, opts?: AnthropicOptions) => Promise<MergedInvoice>;
 
 export interface IngestInput {
   pdfBase64: string;
@@ -28,17 +28,19 @@ export interface IngestResult {
   productCount: number;
 }
 
+const num = (v: unknown): number | null => {
+  const n = parseFloat(String(v ?? ''));
+  return Number.isFinite(n) ? n : null;
+};
+
 export async function ingestInvoice(
   db: Queryable,
   clientId: string,
   input: IngestInput,
-  extract: Extractor = extractInvoiceText,
+  extract: Extractor = extractAndClassify,
 ): Promise<IngestResult> {
-  const raw = await extract(input.pdfBase64);
-  const parsed = parseInvoiceLines(raw);
-  // fillSkus preserves the item shape (only adds a SKU where blank); cast back to the
-  // typed line-item so field access below is checked.
-  const lines = fillSkus(parsed.vendor_name, parsed.line_items) as unknown as ExtractedLineItem[];
+  const merged = await extract(input.pdfBase64);
+  const lines = fillSkus(merged.vendor_name, merged.items) as unknown as ClassifiedItem[];
 
   const inv = await db.query(
     `insert into invoices (client_id, vendor, invoice_number, invoice_date, total, status, pdf_storage_path)
@@ -46,10 +48,10 @@ export async function ingestInvoice(
      returning id`,
     [
       clientId,
-      parsed.vendor_name || null,
-      parsed.invoice_number || null,
-      parsed.invoice_date || null,
-      parsed.invoice_total ?? null,
+      merged.vendor_name || null,
+      merged.invoice_number || null,
+      merged.invoice_date || null,
+      merged.invoice_total ?? null,
       input.pdfStoragePath ?? null,
     ],
   );
@@ -61,27 +63,29 @@ export async function ingestInvoice(
     const backorder = Boolean(p.back_order && String(p.back_order).trim() !== '');
     await db.query(
       `insert into invoice_lines
-         (invoice_id, line_no, description, quantity, wholesale, gems, notes, backorder, synthetic_sku, is_product)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+         (invoice_id, line_no, description, quantity, wholesale, gems, notes, backorder,
+          synthetic_sku, is_product, classification)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         invoiceId,
         lineNo,
         p.description ?? null,
-        p.quantity ?? null,
-        p.unit_price ?? null,
+        num(p.qty),
+        num(p.price),
         p.gems ?? null,
         p.notes ?? null,
         backorder,
         p.sku ?? null,
         p.is_product !== false,
+        JSON.stringify(p),
       ],
     );
   }
 
   return {
     invoiceId,
-    vendorName: parsed.vendor_name,
-    invoiceNumber: parsed.invoice_number,
+    vendorName: merged.vendor_name,
+    invoiceNumber: merged.invoice_number,
     lineCount: lines.length,
     productCount: lines.filter((p) => p.is_product !== false).length,
   };

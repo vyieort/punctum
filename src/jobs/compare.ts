@@ -141,9 +141,9 @@ export async function twoPassClassify(pdfBase64: string, opts: AnthropicOptions 
  * while two-pass generates them — so nothing matches.
  */
 export async function onePassClassify(pdfBase64: string, opts: AnthropicOptions = {}): Promise<ClassifiedItem[]> {
-  const items = await extractAndClassify(pdfBase64, opts);
-  const vendor = items.length ? s(items[0]!.vendor) : '';
-  return fillSkus(vendor, items) as unknown as ClassifiedItem[];
+  const merged = await extractAndClassify(pdfBase64, opts);
+  const vendor = merged.vendor_name || (merged.items.length ? s(merged.items[0]!.vendor) : '');
+  return fillSkus(vendor, merged.items) as unknown as ClassifiedItem[];
 }
 
 export interface CompareDeps {

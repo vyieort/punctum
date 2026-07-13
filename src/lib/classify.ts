@@ -46,6 +46,8 @@ export interface ClassifiedItem {
   gems: string;
   notes: string;
   orientation: string;
+  is_product?: boolean; // present in the merged single-pass output
+  back_order?: string | null;
   [key: string]: unknown;
 }
 
