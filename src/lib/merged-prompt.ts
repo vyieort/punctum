@@ -1,0 +1,38 @@
+// Merged single-pass prompt: extract AND classify in one Claude call.
+//
+// Composed at runtime from the two existing prompts (verbatim) so the A/B tests the real
+// merge, not a paraphrase. A unifying wrapper resolves the one conflict — each source
+// prompt defines its own output shape — by pinning ONE combined schema and telling the
+// model to ignore the per-section output instructions.
+
+import { EXTRACTION_PROMPT } from './prompt.js';
+import { CLASSIFY_PROMPT } from './classify-prompt.js';
+
+export const MERGED_MODEL = 'claude-sonnet-4-6';
+export const MERGED_MAX_TOKENS = 32768;
+
+export const MERGED_PROMPT = `You are a single-pass invoice extraction AND classification system for a body piercing jewelry shop. Read the invoice PDF and return ONE JSON object in which each line item carries BOTH its extracted invoice data AND its catalog classification.
+
+IMPORTANT: the two rule sets below (PART 1 and PART 2) were originally two separate steps, each with its own "Output Format" / "return this structure" section. IGNORE those internal output-format instructions. Your ONLY output is the single combined schema defined here.
+
+Return exactly: {"items": [ <one object per line item, in invoice order> ]}
+Each item object must contain these fields:
+{
+  "vendor": "", "sku": "", "description": "", "qty": "", "price": "",
+  "is_product": true, "back_order": "",
+  "product_type": "", "thread_type": "", "setting": "", "stone_type": "", "stone_color": "",
+  "metal": "", "gauge": "", "size": "", "diameter": "", "bar_length": "", "style_name": "",
+  "is_complex": false, "finish": "", "ring_format": "", "ring_style": "", "barbell_format": "",
+  "barbell_subtype": "", "item_name": "", "variation_name": "", "gems": "", "notes": "", "orientation": ""
+}
+Also include top-level "vendor_name", "invoice_number", "invoice_date", "invoice_total".
+
+Apply BOTH rule sets to every line. PART 1 tells you how to read line items out of the invoice PDF — SKUs, prices, is_product, the gems/notes/back-order columns, and the vendor-specific gem handling (Anatometal accent-gem pairing, NeoMetal in-description gems). PART 2 tells you how to classify each line you read — product_type, setting, item_name, variation_name, orientation, and so on. Where PART 2 refers to "pipe-separated rows" as its input, treat that as the line items you extracted in PART 1. Where the two parts overlap (e.g. BVLA color codes, Anatometal gem pairing), they agree — follow them.
+
+============================ PART 1 — EXTRACTION RULES ============================
+${EXTRACTION_PROMPT}
+
+============================ PART 2 — CLASSIFICATION RULES ============================
+${CLASSIFY_PROMPT}
+
+Return ONLY the JSON object described above. First character must be "{", last character must be "}". No markdown fences, no prose, no explanation.`;

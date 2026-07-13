@@ -17,6 +17,7 @@ import { ingestInvoice } from './jobs/intake.js';
 import { squareConfigFromEnv, listLocations } from './lib/square-client.js';
 import { previewInvoiceImport } from './jobs/import-preview.js';
 import { provisionCategories } from './jobs/provision-categories.js';
+import { runComparison } from './jobs/compare.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -127,6 +128,42 @@ async function run(){
 </script>
 </body></html>`;
 
+// A/B compare page: upload a PDF, run both pipelines, show the classification diff.
+const COMPARE_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compare pipelines (A/B)</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:2rem auto;max-width:820px;color:#1a1a1a;padding:0 1rem}
+  h2{margin:0 0 .5rem} p{color:#555}
+  button{margin-top:1rem;padding:.6rem 1.2rem;border:1px solid #166534;background:#166534;color:#fff;border-radius:6px;cursor:pointer;font:inherit}
+  button:disabled{opacity:.5;cursor:default}
+  #status{margin-top:1rem;color:#333;min-height:1.2em}
+  pre{margin-top:1rem;background:#0f1729;color:#dbe4ff;padding:1rem;border-radius:8px;overflow:auto;font-size:12.5px;line-height:1.45;max-height:70vh}
+</style></head>
+<body>
+  <h2>Compare pipelines (A/B)</h2>
+  <p>Runs <strong>both</strong> the current two-pass and the merged one-pass on one invoice PDF and diffs the classification — no writes. It makes three AI calls, so give it up to ~90 seconds.</p>
+  <input type="file" id="f" accept="application/pdf">
+  <div><button id="go" onclick="run()">Run comparison</button></div>
+  <div id="status"></div>
+  <pre id="out"></pre>
+<script>
+async function run(){
+  var el=document.getElementById('f'), s=document.getElementById('status'), b=document.getElementById('go'), o=document.getElementById('out');
+  if(!el.files||!el.files[0]){ s.textContent='Pick a PDF first.'; return; }
+  var f=el.files[0]; b.disabled=true; o.textContent=''; s.textContent='Running both pipelines on '+f.name+' — up to ~90s…';
+  try{
+    var buf=await f.arrayBuffer();
+    var res=await fetch('/compare',{method:'POST',headers:{'content-type':'application/pdf'},body:buf});
+    var j=await res.json();
+    if(res.ok){ s.textContent='Done — '+j.matched+' matched, '+j.agreements+' agree, '+j.disagreements+' differ ('+j.unmatched.twoPassOnly.length+'/'+j.unmatched.onePassOnly.length+' unmatched).'; o.textContent=JSON.stringify(j,null,2); }
+    else { s.textContent='Error: '+(j.error||res.status); }
+  }catch(e){ s.textContent='Error: '+e.message; }
+  b.disabled=false;
+}
+</script>
+</body></html>`;
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
@@ -191,6 +228,29 @@ const server = createServer(async (req, res) => {
       sendJson(res, 500, { error: (err as Error).message });
     }
     return;
+  }
+
+  // A/B: GET /compare serves the page; POST /compare runs both pipelines and diffs them.
+  if (url.pathname === '/compare') {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(COMPARE_PAGE);
+      return;
+    }
+    if (req.method === 'POST') {
+      try {
+        const pdf = await readBodyBuffer(req);
+        if (pdf.length === 0) {
+          sendJson(res, 400, { error: 'empty upload' });
+          return;
+        }
+        const result = await runComparison(pdf.toString('base64'));
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { error: (err as Error).message });
+      }
+      return;
+    }
   }
 
   // One-time: create the category tree in the (sandbox) Square account + re-seed category_map.
