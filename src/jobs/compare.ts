@@ -116,6 +116,17 @@ export async function twoPassClassify(pdfBase64: string, opts: AnthropicOptions 
   return classifyLines(input, opts);
 }
 
+/**
+ * The merged one-pass, PLUS the synthetic-SKU fill the real pipeline applies. Without this,
+ * invoices with no vendor SKUs (e.g. Quetzalli Shopify orders) leave the one-pass SKUs blank
+ * while two-pass generates them — so nothing matches.
+ */
+export async function onePassClassify(pdfBase64: string, opts: AnthropicOptions = {}): Promise<ClassifiedItem[]> {
+  const items = await extractAndClassify(pdfBase64, opts);
+  const vendor = items.length ? s(items[0]!.vendor) : '';
+  return fillSkus(vendor, items) as unknown as ClassifiedItem[];
+}
+
 export interface CompareDeps {
   anthropic?: AnthropicOptions;
   twoPass?: (pdf: string, opts?: AnthropicOptions) => Promise<ClassifiedItem[]>;
@@ -127,7 +138,7 @@ export async function runComparison(pdfBase64: string, deps: CompareDeps = {}): 
   // sum — keeps the request under Railway's gateway timeout.
   const [two, one] = await Promise.all([
     (deps.twoPass ?? twoPassClassify)(pdfBase64, deps.anthropic),
-    (deps.onePass ?? extractAndClassify)(pdfBase64, deps.anthropic),
+    (deps.onePass ?? onePassClassify)(pdfBase64, deps.anthropic),
   ]);
   return compareClassifications(two, one);
 }
