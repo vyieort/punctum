@@ -156,7 +156,7 @@ async function run(){
     var buf=await f.arrayBuffer();
     var res=await fetch('/compare?filename='+encodeURIComponent(f.name),{method:'POST',headers:{'content-type':'application/pdf'},body:buf});
     var j=await res.json();
-    if(res.ok){ s.textContent='Done — '+j.matched+' matched, '+j.agreements+' agree, '+j.disagreements+' differ ('+j.unmatched.twoPassOnly.length+'/'+j.unmatched.onePassOnly.length+' unmatched).'; o.textContent=JSON.stringify(j,null,2); }
+    if(res.ok){ s.textContent='Done — '+j.criticalAgree+'/'+j.matched+' agree on catalog output, '+j.criticalDiffer+' differ ('+j.unmatched.twoPassOnly.length+'/'+j.unmatched.onePassOnly.length+' unmatched).'; o.textContent=JSON.stringify(j,null,2); }
     else { s.textContent='Error: '+(j.error||res.status); }
   }catch(e){ s.textContent='Error: '+e.message; }
   b.disabled=false;

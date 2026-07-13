@@ -1,8 +1,10 @@
 // A/B: run BOTH pipelines on the same invoice and diff the classifications.
 //   two-pass (current): extract -> parse -> fillSkus -> classify
 //   one-pass (merged):  extractAndClassify
-// Both produce ClassifiedItem[]; we match products by SKU and diff the catalog-decision
-// fields, so we can judge every disagreement against the real invoice.
+// Both produce ClassifiedItem[]; we match products by SKU and diff their fields, SPLIT into
+// output-critical fields (what actually builds the catalog — grouping, category, price) and
+// supporting fields (internal/detail fields that feed into the critical ones or aren't used).
+// A line "agrees" for the merge decision when the CRITICAL fields match.
 
 import type { AnthropicOptions } from '../lib/anthropic.js';
 import { extractInvoiceText } from '../lib/anthropic.js';
@@ -11,12 +13,17 @@ import { fillSkus } from '../lib/sku.js';
 import { classifyLines, type ClassifiedItem, type ClassifierLineInput } from '../lib/classify.js';
 import { extractAndClassify } from '../lib/merged.js';
 
-// The classification decisions that actually drive the catalog (grouping, naming, pricing,
-// categorization). Echoed extraction fields (qty/price/gems/notes) are not compared here.
-const COMPARE_FIELDS = [
-  'product_type', 'thread_type', 'setting', 'stone_type', 'stone_color', 'metal', 'gauge',
-  'size', 'diameter', 'bar_length', 'style_name', 'is_complex', 'ring_format', 'ring_style',
-  'barbell_format', 'barbell_subtype', 'item_name', 'variation_name', 'orientation',
+// The fields that determine catalog OUTPUT: grouping (item_name/variation_name), category
+// (product_type/thread_type/setting/ring_format/barbell_format), and price (metal).
+const CRITICAL_FIELDS = [
+  'item_name', 'variation_name', 'product_type', 'thread_type', 'setting',
+  'ring_format', 'barbell_format', 'metal',
+] as const;
+// Detail fields — they feed into the critical ones (so if item_name/variation_name agree,
+// their differences didn't matter) or aren't used downstream. Reported separately.
+const SUPPORTING_FIELDS = [
+  'stone_type', 'stone_color', 'gauge', 'size', 'diameter', 'bar_length', 'style_name',
+  'is_complex', 'ring_style', 'barbell_subtype', 'orientation',
 ] as const;
 
 export interface FieldDiff {
@@ -27,20 +34,28 @@ export interface FieldDiff {
 export interface LineComparison {
   sku: string;
   description: string;
-  agree: boolean;
-  diffs: FieldDiff[];
+  critical: FieldDiff[]; // catalog-output differences — the ones that matter
+  supporting: FieldDiff[]; // cosmetic / internal differences
 }
 export interface InvoiceComparison {
   products: { twoPass: number; onePass: number };
   matched: number;
-  agreements: number;
-  disagreements: number;
-  lines: LineComparison[]; // only the lines that disagree, for signal
+  criticalAgree: number; // matched lines whose catalog output is identical
+  criticalDiffer: number;
+  lines: LineComparison[]; // lines with any diff, critical-first
   unmatched: { twoPassOnly: string[]; onePassOnly: string[] };
 }
 
 const s = (v: unknown): string => String(v ?? '').trim();
 const isProduct = (i: ClassifiedItem): boolean => i.is_product !== false;
+
+function diffFields(a: ClassifiedItem, b: ClassifiedItem, fields: readonly string[]): FieldDiff[] {
+  const out: FieldDiff[] = [];
+  for (const f of fields) {
+    if (s(a[f]) !== s(b[f])) out.push({ field: f, twoPass: a[f], onePass: b[f] });
+  }
+  return out;
+}
 
 export function compareClassifications(twoPass: ClassifiedItem[], onePass: ClassifiedItem[]): InvoiceComparison {
   const two = twoPass.filter(isProduct);
@@ -54,33 +69,32 @@ export function compareClassifications(twoPass: ClassifiedItem[], onePass: Class
 
   const matchedSkus = new Set<string>();
   const lines: LineComparison[] = [];
-  let agreements = 0;
+  let criticalAgree = 0;
 
   for (const a of two) {
     const k = s(a.sku);
     const b = k ? oneBySku.get(k) : undefined;
     if (!b) continue;
     matchedSkus.add(k);
-    const diffs: FieldDiff[] = [];
-    for (const f of COMPARE_FIELDS) {
-      if (s(a[f]) !== s(b[f])) diffs.push({ field: f, twoPass: a[f], onePass: b[f] });
-    }
-    if (diffs.length === 0) agreements++;
-    else lines.push({ sku: k, description: s(a.description), agree: false, diffs });
+    const critical = diffFields(a, b, CRITICAL_FIELDS);
+    const supporting = diffFields(a, b, SUPPORTING_FIELDS);
+    if (critical.length === 0) criticalAgree++;
+    if (critical.length || supporting.length) lines.push({ sku: k, description: s(a.description), critical, supporting });
   }
+
+  // Surface the catalog-output disagreements first.
+  lines.sort((x, y) => y.critical.length - x.critical.length);
 
   const twoSkus = new Set(two.map((a) => s(a.sku)).filter(Boolean));
   const oneSkus = new Set(one.map((a) => s(a.sku)).filter(Boolean));
-  const twoPassOnly = [...twoSkus].filter((k) => !oneSkus.has(k));
-  const onePassOnly = [...oneSkus].filter((k) => !twoSkus.has(k));
 
   return {
     products: { twoPass: two.length, onePass: one.length },
     matched: matchedSkus.size,
-    agreements,
-    disagreements: lines.length,
+    criticalAgree,
+    criticalDiffer: matchedSkus.size - criticalAgree,
     lines,
-    unmatched: { twoPassOnly, onePassOnly },
+    unmatched: { twoPassOnly: [...twoSkus].filter((k) => !oneSkus.has(k)), onePassOnly: [...oneSkus].filter((k) => !twoSkus.has(k)) },
   };
 }
 
