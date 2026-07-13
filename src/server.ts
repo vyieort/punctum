@@ -94,6 +94,39 @@ async function up(){
 </script>
 </body></html>`;
 
+// One-click page to trigger category provisioning (POSTs to itself).
+const PROVISION_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provision categories</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:3rem auto;max-width:600px;color:#1a1a1a;padding:0 1rem}
+  h2{margin:0 0 .5rem} p{color:#555}
+  .warn{background:#fff8e1;border:1px solid #f2d98a;border-radius:6px;padding:.6rem .8rem;font-size:14px;color:#7a5b00}
+  button{margin-top:1rem;padding:.6rem 1.2rem;border:1px solid #166534;background:#166534;color:#fff;border-radius:6px;cursor:pointer;font:inherit}
+  button:disabled{opacity:.5;cursor:default}
+  #status{margin-top:1rem;color:#333;min-height:1.2em}
+</style></head>
+<body>
+  <h2>Provision category tree</h2>
+  <p>Creates the full category hierarchy (48 categories) in the connected Square <strong>sandbox</strong> and re-seeds the category map with the new IDs.</p>
+  <div class="warn">Run this <strong>once</strong> against an empty sandbox — running it again creates duplicate categories.</div>
+  <button id="go" onclick="run()">Provision categories</button>
+  <div id="status"></div>
+<script>
+async function run(){
+  if(!confirm('Create ~48 categories in the Square sandbox? Run this only once.')) return;
+  var b=document.getElementById('go'), s=document.getElementById('status');
+  b.disabled=true; s.textContent='Provisioning — creating categories in Square…';
+  try{
+    var res=await fetch('/jobs/categories/provision?client=RE',{method:'POST'});
+    var j=await res.json();
+    if(res.ok){ s.textContent='Done — created '+j.created+' categories. Re-run the preview to see your own category IDs.'; }
+    else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }
+  }catch(e){ s.textContent='Error: '+e.message; b.disabled=false; }
+}
+</script>
+</body></html>`;
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
@@ -161,16 +194,23 @@ const server = createServer(async (req, res) => {
   }
 
   // One-time: create the category tree in the (sandbox) Square account + re-seed category_map.
-  // POST because it writes to Square. Run once against an empty account.
-  if (url.pathname === '/jobs/categories/provision' && req.method === 'POST') {
-    const client = url.searchParams.get('client') ?? 'RE';
-    try {
-      const result = await provisionCategories(squareConfigFromEnv(), getPool() as unknown as Queryable, client);
-      sendJson(res, 200, { client, created: result.created });
-    } catch (err) {
-      sendJson(res, 500, { error: (err as Error).message });
+  // GET serves a one-click page; POST does the work (writes to Square). Run once.
+  if (url.pathname === '/jobs/categories/provision') {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PROVISION_PAGE);
+      return;
     }
-    return;
+    if (req.method === 'POST') {
+      const client = url.searchParams.get('client') ?? 'RE';
+      try {
+        const result = await provisionCategories(squareConfigFromEnv(), getPool() as unknown as Queryable, client);
+        sendJson(res, 200, { client, created: result.created });
+      } catch (err) {
+        sendJson(res, 500, { error: (err as Error).message });
+      }
+      return;
+    }
   }
 
   // Read-only credential check: confirm the Square token + host reach the sandbox.
