@@ -72,6 +72,7 @@ test('new invoice: creates the item with all variations, receives inventory, wri
   assert.equal(r.variationsAdded, 2);
   assert.equal(r.variationsRestocked, 0);
   assert.equal(r.inventoryAdjusted, 2);
+  assert.equal(r.errors.length, 0);
   assert.deepEqual(inventory.map((i) => i.catalog_object_id).sort(), ['V1', 'V2']);
 
   const map = await db.query<{ vendor_sku: string; square_item_id: string; square_variation_id: string; retail_price: string; status: string }>(

@@ -46,6 +46,17 @@ test('planItems merges duplicate variations (same variation_name) and sums qty',
   assert.equal(items[0]!.variations[0]!.qty, 3);
 });
 
+test('planItems disambiguates shared SKUs within an item (gem-pairing)', () => {
+  const items = planItems([
+    line({ item_name: 'Gem Ball', variation_name: '4MM Champagne CZ', sku: 'ED-GB' }),
+    line({ item_name: 'Gem Ball', variation_name: '4MM Aquamarine CZ', sku: 'ED-GB' }),
+  ]);
+  assert.equal(items[0]!.variations.length, 2);
+  const skus = items[0]!.variations.map((v) => v.sku);
+  assert.notEqual(skus[0], skus[1]); // no longer identical
+  assert.ok(skus.every((s) => s.startsWith('ED-GB-'))); // both suffixed deterministically
+});
+
 test('planItems keeps distinct item_names as separate items, in order', () => {
   const items = planItems([
     line({ item_name: 'Muse Seam Ring' }),

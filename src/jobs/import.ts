@@ -48,6 +48,7 @@ export interface ImportResult {
   variationsAdded: number;
   variationsRestocked: number;
   inventoryAdjusted: number;
+  errors: Array<{ item: string; error: string }>;
 }
 
 export interface ImportOptions {
@@ -116,10 +117,14 @@ export async function runImport(
   const planned = planItems(toImportLines(items, { pricingRules, categoryMap }).lines);
 
   await db.query(`update invoices set status = 'importing', updated_at = now() where id = $1`, [invoiceId]);
-  const result: ImportResult = { invoiceId, itemsCreated: 0, variationsAdded: 0, variationsRestocked: 0, inventoryAdjusted: 0 };
+  const result: ImportResult = {
+    invoiceId, itemsCreated: 0, variationsAdded: 0, variationsRestocked: 0, inventoryAdjusted: 0, errors: [],
+  };
 
-  try {
-    for (const item of planned) {
+  // Per-item try/catch: one item's failure (e.g. a Square validation error) is recorded but
+  // doesn't abort the rest of the invoice.
+  for (const item of planned) {
+    try {
       const found = await ops.search(item.item_name);
       const resolved: Array<{ v: PlannedVariation; itemId: string; variationId: string }> = [];
 
@@ -178,12 +183,14 @@ export async function runImport(
           retailCents: v.retail_cents,
         });
       }
+    } catch (e) {
+      result.errors.push({ item: item.item_name, error: (e as Error).message });
     }
-    await db.query(`update invoices set status = 'done', updated_at = now() where id = $1`, [invoiceId]);
-  } catch (err) {
-    await db.query(`update invoices set status = 'error', updated_at = now() where id = $1`, [invoiceId]).catch(() => {});
-    throw err;
   }
 
+  await db.query(`update invoices set status = $2, updated_at = now() where id = $1`, [
+    invoiceId,
+    result.errors.length ? 'error' : 'done',
+  ]);
   return result;
 }

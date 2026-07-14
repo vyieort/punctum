@@ -68,8 +68,22 @@ export function planItems(lines: ImportLine[]): PlannedItem[] {
       });
     }
   }
+
+  // Square requires a unique SKU per variation. Gem-pairing (Anatometal) reuses one parent
+  // SKU across several gem variations, so any SKU shared within an item gets a deterministic
+  // suffix from the variation name (same variation -> same SKU, so reorders still line up).
+  for (const item of byItem.values()) {
+    const counts = new Map<string, number>();
+    for (const v of item.variations) counts.set(v.sku, (counts.get(v.sku) ?? 0) + 1);
+    for (const v of item.variations) {
+      if ((counts.get(v.sku) ?? 0) > 1) v.sku = `${v.sku}-${skuSlug(v.variation_name)}`;
+    }
+  }
+
   return [...byItem.values()];
 }
+
+const skuSlug = (v: string): string => v.toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 24);
 
 const variationData = (v: PlannedVariation) => ({
   name: v.variation_name,
