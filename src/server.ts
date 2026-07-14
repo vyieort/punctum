@@ -683,7 +683,11 @@ const server = createServer(async (req, res) => {
         invoiceId,
         action,
         async (id) => {
-          await runImport(pool, id); // auto-push to Square on approval
+          // Mark 'importing' synchronously so the redirect shows it, then push to Square in the
+          // BACKGROUND — the operator is redirected immediately and can move on while it runs.
+          // The import is idempotent; on failure the invoice lands 'error' (retry from import page).
+          await pool.query(`update invoices set status = 'importing', updated_at = now() where id = $1`, [id]);
+          void runImport(pool, id).catch(() => {});
         },
       );
       res.writeHead(result.status, result.headers);

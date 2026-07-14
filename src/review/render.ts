@@ -43,6 +43,7 @@ export function renderReviewPage(data: InvoiceForReview): string {
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+${status === 'importing' ? '<meta http-equiv="refresh" content="4">' : ''}
 <title>Review &mdash; ${esc(invoice.vendor)} ${esc(invoice.invoice_number)}</title>
 <style>
   body{font-family:system-ui,-apple-system,sans-serif;margin:1.5rem auto;max-width:1320px;color:#1a1a1a;padding:0 1rem}
@@ -86,7 +87,7 @@ export function renderReviewPage(data: InvoiceForReview): string {
           : ''
       }
       ${status === 'done' ? '<p>&#10003; Approved &amp; pushed to Square.</p>' : ''}
-      ${status === 'importing' ? '<p>Pushing to Square&hellip;</p>' : ''}
+      ${status === 'importing' ? '<p>&#8987; Approving &amp; pushing to Square&hellip; you can leave this page &mdash; it finishes on its own.</p>' : ''}
       ${status === 'approved' ? '<p>&#10003; Approved.</p>' : ''}
       ${
         status === 'error'

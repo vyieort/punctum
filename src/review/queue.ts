@@ -68,7 +68,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export function renderQueuePage(rows: QueueRow[]): string {
-  const working = rows.some((r) => r.status === 'queued' || r.status === 'processing');
+  const working = rows.some((r) => r.status === 'queued' || r.status === 'processing' || r.status === 'importing');
   const counts = rows.reduce<Record<string, number>>((acc, r) => {
     acc[r.status] = (acc[r.status] ?? 0) + 1;
     return acc;
