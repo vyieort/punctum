@@ -43,11 +43,13 @@ export async function handleReview(
         /* status reflects the failure */
       }
     }
-    return redirect(`/invoices/${invoiceId}/review`);
+    // Back to the queue so the operator can grab the next invoice (the push finishes in the
+    // background; the queue shows this one go importing -> done on its own).
+    return redirect('/queue');
   }
   if (method === 'POST' && action === 'reject') {
     await rejectInvoice(db, invoiceId);
-    return redirect(`/invoices/${invoiceId}/review`);
+    return redirect('/queue');
   }
   return html(405, '<h1>Method not allowed</h1>');
 }
