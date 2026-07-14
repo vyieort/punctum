@@ -76,11 +76,15 @@ export function renderReviewPage(data: InvoiceForReview): string {
         <thead><tr><th>#</th><th>Description</th><th>Qty</th><th>Wholesale</th><th>Gems</th><th>Notes</th><th>SKU</th>${showBackorder ? '<th>Back order</th>' : ''}<th>Product?</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-      <div class="actions">
-        <form method="post" action="/invoices/${esc(invoice.id)}/approve"><button class="approve" type="submit">Approve invoice</button></form>
-        <form method="post" action="/invoices/${esc(invoice.id)}/reject"><button class="reject" type="submit">Reject / send back</button></form>
+      ${
+        status === 'in_review'
+          ? `<div class="actions">
+        <form method="post" action="/invoices/${esc(invoice.id)}/approve" onsubmit="return lock(this)"><button class="approve" type="submit">Approve invoice</button></form>
+        <form method="post" action="/invoices/${esc(invoice.id)}/reject" onsubmit="return lock(this)"><button class="reject" type="submit">Reject / send back</button></form>
       </div>
-      <div class="note">Read-only: confirm the parsed data matches the invoice, then Approve. If it&rsquo;s wrong, Reject &mdash; corrections are made at the source (re-parse), not here.</div>
+      <div class="note">Read-only: confirm the parsed data matches the invoice, then Approve. If it&rsquo;s wrong, Reject &mdash; corrections are made at the source (re-parse), not here.</div>`
+          : ''
+      }
       ${status === 'done' ? '<p>&#10003; Approved &amp; pushed to Square.</p>' : ''}
       ${status === 'importing' ? '<p>Pushing to Square&hellip;</p>' : ''}
       ${status === 'approved' ? '<p>&#10003; Approved.</p>' : ''}
@@ -88,5 +92,16 @@ export function renderReviewPage(data: InvoiceForReview): string {
       ${status === 'needs_review' ? '<p>&#8617; Sent back for re-parse.</p>' : ''}
     </div>
   </div>
+<script>
+  // Guard against a double-click firing two approves (the push takes a few seconds to return).
+  var submitted=false;
+  function lock(f){
+    if(submitted) return false;
+    submitted=true;
+    var btn=f.querySelector('button'); if(btn) btn.textContent = btn.classList.contains('approve') ? 'Approving…' : 'Rejecting…';
+    setTimeout(function(){ var bs=document.querySelectorAll('.actions button'); for(var i=0;i<bs.length;i++) bs[i].disabled=true; }, 0);
+    return true;
+  }
+</script>
 </body></html>`;
 }

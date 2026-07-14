@@ -76,6 +76,7 @@ export function toImportLine(item: ClassifiedItem, cfg: BridgeConfig): BridgeRes
     retail_cents,
     qty: parseInt(String(item.qty ?? '1'), 10) || 1,
     category_id: categoryId,
+    wholesale_cents: Math.round((parseFloat(String(item.price ?? '')) || 0) * 100),
     ...(vendorCategoryId ? { vendor_category_id: vendorCategoryId } : {}),
     ...(descriptionHtml ? { description_html: descriptionHtml } : {}),
   };

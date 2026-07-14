@@ -79,11 +79,13 @@ async function upsertMapping(
     itemName: string;
     variationName: string;
     retailCents: number;
+    wholesaleCents: number;
     tags: string;
     itemDescription: string;
   },
 ): Promise<void> {
   const retail = row.retailCents / 100;
+  const wholesale = row.wholesaleCents / 100;
   const found = await db.query(
     `select id, times_ordered from catalog_mapping where client_id = $1 and vendor_sku = $2 limit 1`,
     [clientId, row.sku],
@@ -93,18 +95,18 @@ async function upsertMapping(
     await db.query(
       `update catalog_mapping
          set square_item_id = $1, square_variation_id = $2, item_name = $3, variation_name = $4,
-             retail_price = $5, tags = $6, item_description = $7, status = 'PENDING', times_ordered = $8,
-             last_ordered = now()::date, updated_at = now()
-       where id = $9`,
-      [row.itemId, row.variationId, row.itemName, row.variationName, retail, row.tags, row.itemDescription, (r.times_ordered ?? 0) + 1, r.id],
+             retail_price = $5, wholesale_price = $6, tags = $7, item_description = $8,
+             status = 'PENDING', times_ordered = $9, last_ordered = now()::date, updated_at = now()
+       where id = $10`,
+      [row.itemId, row.variationId, row.itemName, row.variationName, retail, wholesale, row.tags, row.itemDescription, (r.times_ordered ?? 0) + 1, r.id],
     );
   } else {
     await db.query(
       `insert into catalog_mapping
          (client_id, vendor, vendor_sku, square_item_id, square_variation_id, item_name, variation_name,
-          retail_price, tags, item_description, status, times_ordered, first_seen, last_ordered)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'PENDING', 1, now()::date, now()::date)`,
-      [clientId, row.vendor || null, row.sku, row.itemId, row.variationId, row.itemName, row.variationName, retail, row.tags, row.itemDescription],
+          retail_price, wholesale_price, tags, item_description, status, times_ordered, first_seen, last_ordered)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'PENDING', 1, now()::date, now()::date)`,
+      [clientId, row.vendor || null, row.sku, row.itemId, row.variationId, row.itemName, row.variationName, retail, wholesale, row.tags, row.itemDescription],
     );
   }
 }
@@ -241,6 +243,7 @@ export async function runImport(
           itemName: displayName(item),
           variationName: v.variation_name,
           retailCents: v.retail_cents,
+          wholesaleCents: v.wholesale_cents ?? 0,
           tags: item.tags ?? '',
           itemDescription: item.description_html ?? '',
         });

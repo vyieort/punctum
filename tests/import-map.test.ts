@@ -35,6 +35,7 @@ test('non-gold end: default multiplier, leaf + vendor category, qty parsed', () 
     CFG,
   );
   assert.equal(r.line!.retail_cents, 6000); // 20 * 3.0 -> $60.00
+  assert.equal(r.line!.wholesale_cents, 2000); // invoice cost carried through
   assert.equal(r.line!.category_id, 'CAT_TL_BEZEL');
   assert.equal(r.line!.vendor_category_id, 'CAT_V_NEO');
   assert.equal(r.line!.qty, 2);

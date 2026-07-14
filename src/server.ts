@@ -13,7 +13,9 @@ import { generateTags, type TagInputRow } from './lib/tagger.js';
 import { getPool } from './db/pool.js';
 import { runTagsJob, type Queryable } from './jobs/pg-rows.js';
 import { handleReview } from './review/handler.js';
-import { ingestInvoice } from './jobs/intake.js';
+import { ingestInvoice, queueInvoice } from './jobs/intake.js';
+import { startWorker } from './jobs/worker.js';
+import { getQueueRows, renderQueuePage } from './review/queue.js';
 import { squareConfigFromEnv, listLocations } from './lib/square-client.js';
 import { previewInvoiceImport } from './jobs/import-preview.js';
 import { provisionCategories } from './jobs/provision-categories.js';
@@ -95,6 +97,51 @@ async function up(){
     if(res.ok && j.reviewUrl){ s.textContent='Done — opening review…'; location.href=j.reviewUrl; }
     else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }
   }catch(err){ s.textContent='Error: '+err.message; b.disabled=false; }
+}
+</script>
+</body></html>`;
+
+// Batch upload: pick many PDFs, queue each fast (compress + store), then work the /queue list.
+const BATCH_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Batch upload invoices</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:3rem auto;max-width:620px;color:#1a1a1a;padding:0 1rem}
+  h2{margin:0 0 .5rem} p{color:#555}
+  .drop{border:1px dashed #bbb;border-radius:8px;padding:2rem;text-align:center;background:#fafafa}
+  button{margin-top:1rem;padding:.6rem 1.2rem;border:1px solid #166534;background:#166534;color:#fff;border-radius:6px;cursor:pointer;font:inherit}
+  button:disabled{opacity:.5;cursor:default}
+  #status{margin-top:1rem;color:#333;min-height:1.2em} ul{color:#444;font-size:14px} a{color:#166534}
+</style></head>
+<body>
+  <h2>Batch upload invoices</h2>
+  <p>Pick several vendor PDFs. They're queued and extracted in the <strong>background</strong> — you can close this tab and come back to the queue as each is ready to review.</p>
+  <div class="drop">
+    <input type="file" id="f" accept="application/pdf" multiple>
+    <div><button id="go" onclick="up()">Queue all</button></div>
+  </div>
+  <div id="status"></div>
+  <ul id="list"></ul>
+<script>
+async function up(){
+  var el=document.getElementById('f'), s=document.getElementById('status'), list=document.getElementById('list'), b=document.getElementById('go');
+  if(!el.files||!el.files.length){ s.textContent='Pick some PDFs first.'; return; }
+  b.disabled=true;
+  var files=Array.prototype.slice.call(el.files), done=0;
+  for(var i=0;i<files.length;i++){
+    var file=files[i];
+    var li=document.createElement('li'); li.textContent=file.name+' — queuing…'; list.appendChild(li);
+    try{
+      var buf=await file.arrayBuffer();
+      var res=await fetch('/invoices/queue?filename='+encodeURIComponent(file.name),{method:'POST',headers:{'content-type':'application/pdf'},body:buf});
+      var j=await res.json();
+      if(res.ok){ done++; li.textContent=file.name+' — queued ✓'; }
+      else { li.textContent=file.name+' — error: '+(j.error||res.status); }
+    }catch(e){ li.textContent=file.name+' — error: '+e.message; }
+    s.textContent='Queued '+done+'/'+files.length+'…';
+  }
+  s.innerHTML='Done — '+done+' queued and processing in the background. <a href="/queue">Open the review queue →</a>';
+  b.disabled=false;
 }
 </script>
 </body></html>`;
@@ -573,6 +620,45 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // Batch upload: GET /invoices/batch serves the multi-file form; POST /invoices/queue queues one.
+  if (url.pathname === '/invoices/batch' && req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(BATCH_PAGE);
+    return;
+  }
+  if (url.pathname === '/invoices/queue' && req.method === 'POST') {
+    try {
+      const pdf = await readBodyBuffer(req);
+      if (pdf.length === 0) {
+        sendJson(res, 400, { error: 'empty upload' });
+        return;
+      }
+      const client = url.searchParams.get('client') ?? 'RE';
+      const filename = url.searchParams.get('filename') ?? undefined;
+      const result = await queueInvoice(getPool() as unknown as Queryable, client, {
+        pdfBase64: pdf.toString('base64'),
+        filename,
+      });
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  // Review queue: every invoice with its status + a Review link once ready.
+  if (url.pathname === '/queue' && req.method === 'GET') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    try {
+      const rows = await getQueueRows(getPool() as unknown as Queryable, client);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(renderQueuePage(rows));
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
   // Read-only review UI over invoice_lines: /invoices/:id/{review,approve,reject}
   const parts = url.pathname.split('/').filter(Boolean);
   if (parts[0] === 'invoices' && parts.length === 3) {
@@ -601,4 +687,13 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`punctum listening on :${PORT}`);
+  // Background worker drains the batch-upload queue (only when a DB is configured).
+  if (process.env.DATABASE_URL) {
+    try {
+      startWorker(getPool() as unknown as Queryable);
+      console.log('batch worker started');
+    } catch (err) {
+      console.error('batch worker failed to start:', (err as Error).message);
+    }
+  }
 });

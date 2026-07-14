@@ -22,6 +22,7 @@ export interface CatalogRow {
   tags: string;
   variationName: string;
   status: string;
+  wholesalePrice: string;
   retailPrice: string;
   imageUrl: string;
   hasCandidates: boolean;
@@ -33,8 +34,8 @@ const stripTagSuffix = (name: string): string => name.replace(/\s*\[.*\]\s*$/, '
 export async function getCatalogRows(db: Queryable, clientId: string, limit = 1000): Promise<CatalogRow[]> {
   const { rows } = await db.query(
     `select seq, vendor, vendor_sku, square_item_id, item_name, variation_name, tags,
-            status::text as status, retail_price::text as retail_price, image_url,
-            coalesce(image_candidates, '') <> '' as has_candidates
+            status::text as status, wholesale_price::text as wholesale_price, retail_price::text as retail_price,
+            image_url, coalesce(image_candidates, '') <> '' as has_candidates
        from catalog_mapping
       where client_id = $1 and coalesce(square_variation_id, '') <> ''
       order by item_name, variation_name
@@ -52,6 +53,7 @@ export async function getCatalogRows(db: Queryable, clientId: string, limit = 10
       tags: str(row.tags),
       variationName: str(row.variation_name),
       status: str(row.status),
+      wholesalePrice: str(row.wholesale_price),
       retailPrice: str(row.retail_price),
       imageUrl: str(row.image_url),
       hasCandidates: row.has_candidates === true,
@@ -90,7 +92,8 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
       const urlCell = r.imageUrl
         ? `<a href="${esc(r.imageUrl)}" target="_blank" rel="noreferrer" class="url">${esc(r.imageUrl)}</a>`
         : '';
-      const price = r.retailPrice ? `$${esc(r.retailPrice)}` : '';
+      const wholesale = r.wholesalePrice ? `$${esc(r.wholesalePrice)}` : '';
+      const retail = r.retailPrice ? `$${esc(r.retailPrice)}` : '';
       const alts = r.hasCandidates
         ? `<button class="alts" data-seq="${esc(r.seq)}" data-cap="${esc(caption)}">Review alternatives</button>`
         : '';
@@ -100,7 +103,8 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
         <td>${esc(r.variationName)}</td>
         <td>${esc(r.vendor)}</td>
         <td class="mono">${esc(r.vendorSku)}</td>
-        <td>${price}</td>
+        <td class="wcell">${wholesale}</td>
+        <td>${retail}</td>
         <td><span class="badge" style="background:${color}">${esc(r.status)}</span></td>
         <td class="url-td">${urlCell}</td>
         <td>${alts}</td>
@@ -151,7 +155,7 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
     <div class="pvmeta"><span id="pvcap"></span><a id="pvlink" href="#" target="_blank" rel="noreferrer" style="display:none">open full size ↗</a></div>
   </div>
   <table>
-    <thead><tr><th></th><th>Item</th><th>Variation</th><th>Vendor</th><th>SKU</th><th>Price</th><th>Status</th><th>Image URL</th><th></th></tr></thead>
+    <thead><tr><th></th><th>Item</th><th>Variation</th><th>Vendor</th><th>SKU</th><th>Wholesale</th><th>Retail</th><th>Status</th><th>Image URL</th><th></th></tr></thead>
     <tbody>${body}</tbody>
   </table>
 <script>

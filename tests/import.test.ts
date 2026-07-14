@@ -81,13 +81,15 @@ test('new invoice: creates the item with all variations, receives inventory, wri
   assert.deepEqual(inventory.map((i) => i.catalog_object_id).sort(), ['V1', 'V2']);
   assert.match(createdNames[0]!, /^18G 4MM Threadless Bezel-Set \[NEO /); // POS tags folded into the name
 
-  const map = await db.query<{ vendor_sku: string; square_item_id: string; square_variation_id: string; retail_price: string; status: string }>(
-    `select vendor_sku, square_item_id, square_variation_id, retail_price::text as retail_price, status
+  const map = await db.query<{ vendor_sku: string; square_item_id: string; square_variation_id: string; retail_price: string; wholesale_price: string; status: string }>(
+    `select vendor_sku, square_item_id, square_variation_id, retail_price::text as retail_price,
+            wholesale_price::text as wholesale_price, status
        from catalog_mapping where client_id='RE' order by vendor_sku`,
   );
   assert.equal(map.rows.length, 2);
   assert.equal(map.rows[0]!.square_item_id, 'ITEM1');
   assert.equal(map.rows[0]!.retail_price, '60.00'); // 20 * 3.0
+  assert.equal(map.rows[0]!.wholesale_price, '20.00'); // invoice cost carried into the mapping
   assert.equal(map.rows[0]!.status, 'PENDING');
 
   const inv = await db.query<{ status: string }>(`select status from invoices where id = $1`, [INV]);

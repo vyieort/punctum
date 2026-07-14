@@ -22,6 +22,7 @@ export interface ImportLine {
   category_id: string; // leaf / reporting category
   vendor_category_id?: string; // optional second (vendor) category
   description_html?: string; // optional item description
+  wholesale_cents?: number; // invoice cost, carried for the mapping/review
 }
 
 export interface PlannedVariation {
@@ -29,6 +30,7 @@ export interface PlannedVariation {
   sku: string;
   retail_cents: number;
   qty: number;
+  wholesale_cents?: number;
 }
 
 export interface PlannedItem {
@@ -68,6 +70,7 @@ export function planItems(lines: ImportLine[]): PlannedItem[] {
         sku: l.sku,
         retail_cents: l.retail_cents,
         qty: l.qty,
+        ...(l.wholesale_cents != null ? { wholesale_cents: l.wholesale_cents } : {}),
       });
     }
   }
