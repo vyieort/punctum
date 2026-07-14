@@ -225,22 +225,33 @@ const IMAGES_PAGE = `<!doctype html>
 <body>
   <h2>Enrich images</h2>
   <p>Finds a matching product photo for each newly imported variation (SerpAPI search &rarr; Claude Vision pick) and attaches it to the Square <strong>sandbox</strong> item. Variations that already have an image are skipped.</p>
-  <div class="warn">Each item costs a SerpAPI + a Vision call, so this runs a bounded batch. Re-click to keep going.</div>
-  <p><label>Batch size: <input type="number" id="limit" value="10" min="1" max="100"></label></p>
+  <div class="warn">Each item costs a SerpAPI + a Vision call. It runs in small safe chunks automatically until it reaches your number (or nothing's left) — no single request times out.</div>
+  <p><label>How many to enrich this run: <input type="number" id="limit" value="50" min="1" max="1000"></label></p>
   <button id="go" onclick="run()">Enrich next batch</button>
   <div id="status"></div>
   <pre id="out"></pre>
 <script>
 async function run(){
   var b=document.getElementById('go'), s=document.getElementById('status'), o=document.getElementById('out');
-  var limit=document.getElementById('limit').value||10;
-  b.disabled=true; s.textContent='Enriching up to '+limit+' variations — this can take a bit…';
-  try{
-    var res=await fetch('/jobs/images/run?client=RE&limit='+encodeURIComponent(limit),{method:'POST'});
-    var j=await res.json();
-    if(res.ok){ s.textContent='Done — '+j.enriched+' enriched, '+j.noImage+' no match, '+j.skipped+' already had an image ('+j.processed+' processed).'; o.textContent=JSON.stringify(j,null,2); }
-    else { s.textContent='Error: '+(j.error||res.status); }
-  }catch(e){ s.textContent='Error: '+e.message; }
+  var target=parseInt(document.getElementById('limit').value,10)||10;
+  var CHUNK=8; // keep each request well under the gateway timeout
+  var tot={processed:0,enriched:0,noImage:0,skipped:0};
+  b.disabled=true;
+  while(tot.processed<target){
+    var lim=Math.min(CHUNK, target-tot.processed);
+    s.textContent='Enriching… '+tot.enriched+' matched, '+tot.noImage+' no-match ('+tot.processed+'/'+target+')';
+    var res, txt, j;
+    try{
+      res=await fetch('/jobs/images/run?client=RE&limit='+lim,{method:'POST'});
+      txt=await res.text();
+    }catch(e){ s.textContent='Stopped: '+e.message+'. Finished items are saved — click to continue.'; b.disabled=false; return; }
+    try{ j=JSON.parse(txt); }catch(_){ s.textContent='Stopped: a batch hit the server timeout. Finished items are saved — click to continue.'; b.disabled=false; return; }
+    if(!res.ok){ s.textContent='Error: '+(j.error||res.status); b.disabled=false; return; }
+    tot.processed+=j.processed; tot.enriched+=j.enriched; tot.noImage+=j.noImage; tot.skipped+=j.skipped;
+    o.textContent=JSON.stringify(tot,null,2);
+    if(j.processed===0){ s.textContent='All done — nothing left to enrich.'; b.disabled=false; return; }
+  }
+  s.textContent='Done — '+tot.enriched+' matched, '+tot.noImage+' no-match, '+tot.skipped+' skipped ('+tot.processed+' processed).';
   b.disabled=false;
 }
 </script>
