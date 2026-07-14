@@ -8,6 +8,7 @@
 import type { Queryable } from './pg-rows.js';
 import { fillSkus } from '../lib/sku.js';
 import { extractAndClassify, type MergedInvoice } from '../lib/merged.js';
+import { maybeCompressPdf } from '../lib/pdf-compress.js';
 import { normalizeClassification } from '../lib/normalize.js';
 import type { ClassifiedItem } from '../lib/classify.js';
 import type { AnthropicOptions } from '../lib/anthropic.js';
@@ -40,7 +41,10 @@ export async function ingestInvoice(
   input: IngestInput,
   extract: Extractor = extractAndClassify,
 ): Promise<IngestResult> {
-  const merged = await extract(input.pdfBase64);
+  // Oversized scanned PDFs (e.g. a 20MB NeoMetal scan) are downsampled first so the AI call
+  // stays well under the gateway timeout. No-op for normal-sized invoices.
+  const { base64: pdfForAi } = await maybeCompressPdf(input.pdfBase64);
+  const merged = await extract(pdfForAi);
   const lines = (fillSkus(merged.vendor_name, merged.items) as unknown as ClassifiedItem[]).map(
     normalizeClassification,
   );

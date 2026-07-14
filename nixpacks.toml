@@ -1,0 +1,5 @@
+# Railway build config. Ghostscript is needed to downsample oversized scanned invoice PDFs
+# (e.g. a 20MB NeoMetal scan) before the extract+classify AI call, so the request doesn't
+# exceed the gateway timeout. Added on top of the auto-detected Node setup.
+[phases.setup]
+aptPkgs = ["ghostscript"]
