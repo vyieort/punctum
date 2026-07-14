@@ -44,12 +44,12 @@ test('renderCatalogPage gives imaged rows a Show + Reject; no-image rows get nei
   await addRow(db, { sku: 'S2', vid: 'V2', status: 'NO_IMAGE' });
   const html = renderCatalogPage(await getCatalogRows(db as unknown as Queryable, 'RE'));
   assert.match(html, /id="preview"/); // sticky 500x500 preview pane
-  assert.match(html, /data-url="https:\/\/p\/1\.jpg"/); // Show button carries the image url
+  assert.match(html, /class="thumb" src="https:\/\/p\/1\.jpg" data-url="https:\/\/p\/1\.jpg"/); // clickable row thumbnail
   assert.match(html, /class="rej" data-seq="/); // reject button
   assert.match(html, /1 ENRICHED/);
   assert.match(html, /1 NO_IMAGE/);
-  // only the one imaged row gets a Show button
-  assert.equal((html.match(/class="show"/g) ?? []).length, 1);
+  // only the one imaged row gets a thumbnail
+  assert.equal((html.match(/class="thumb"/g) ?? []).length, 1);
 });
 
 test('rejectImage deletes the Square image, re-queues PENDING, records the rejected url', async () => {

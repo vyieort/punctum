@@ -74,16 +74,16 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
     .map((r) => {
       const color = STATUS_COLOR[r.status] ?? '#6b7280';
       const caption = `${r.itemName}${r.variationName ? ' — ' + r.variationName : ''}`;
-      const showBtn = r.imageUrl
-        ? `<button class="show" data-url="${esc(r.imageUrl)}" data-cap="${esc(caption)}">Show</button>`
-        : '';
+      const thumb = r.imageUrl
+        ? `<img class="thumb" src="${esc(r.imageUrl)}" data-url="${esc(r.imageUrl)}" data-cap="${esc(caption)}" loading="lazy" alt="" title="Click to enlarge">`
+        : '<span class="nothumb">—</span>';
       const urlCell = r.imageUrl
         ? `<a href="${esc(r.imageUrl)}" target="_blank" rel="noreferrer" class="url">${esc(r.imageUrl)}</a>`
         : '';
       const price = r.retailPrice ? `$${esc(r.retailPrice)}` : '';
       const reject = r.imageUrl ? `<button class="rej" data-seq="${esc(r.seq)}">Reject</button>` : '';
       return `<tr>
-        <td class="showcell">${showBtn}</td>
+        <td class="showcell">${thumb}</td>
         <td><div class="item">${esc(r.itemName)}</div>${r.tags ? `<div class="tags">${esc(r.tags)}</div>` : ''}</td>
         <td>${esc(r.variationName)}</td>
         <td>${esc(r.vendor)}</td>
@@ -112,23 +112,24 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
   table{border-collapse:collapse;width:100%;font-size:13px}
   th,td{border-bottom:1px solid #eee;padding:.5rem .6rem;text-align:left;vertical-align:top}
   th{color:#666;font-weight:600}
-  .showcell{width:64px}
-  .show{font:inherit;font-size:12px;padding:.25rem .6rem;border:1px solid #166534;color:#166534;background:#fff;border-radius:6px;cursor:pointer}
+  .showcell{width:58px}
+  .thumb{width:50px;height:50px;object-fit:cover;border-radius:5px;border:1px solid #e5e7eb;background:#f3f4f6;cursor:pointer;display:block}
+  .nothumb{color:#9ca3af}
   .item{font-weight:600} .tags{color:#6b7280;font-size:11px;margin-top:2px}
   .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#374151}
   .badge{color:#fff;border-radius:999px;padding:.1rem .5rem;font-size:11px;font-weight:600;white-space:nowrap}
   .url{color:#2563eb;font-size:11px;word-break:break-all;display:inline-block;max-width:280px} .url-td{max-width:300px}
   .rej{font:inherit;font-size:12px;padding:.25rem .6rem;border:1px solid #b91c1c;color:#b91c1c;background:#fff;border-radius:6px;cursor:pointer}
-  .rej:disabled,.show:disabled{opacity:.6;cursor:default}
-  tr.active{background:#f0fdf4} tr.active .show{background:#166534;color:#fff}
+  .rej:disabled{opacity:.6;cursor:default}
+  tr.active{background:#f0fdf4} tr.active .thumb{outline:2px solid #166534}
   tr.rejected{opacity:.45}
 </style></head>
 <body>
   <h2>Catalog review</h2>
-  <p class="sub">${rows.length} variations${countLine ? ' — ' + esc(countLine) : ''}. Click <strong>Show</strong> to preview an image up top; <strong>Reject</strong> removes a wrong image and re-queues it for a new match.</p>
+  <p class="sub">${rows.length} variations${countLine ? ' — ' + esc(countLine) : ''}. Click a <strong>thumbnail</strong> to preview it large up top; <strong>Reject</strong> removes a wrong image and re-queues it for a new match.</p>
   <div id="preview">
     <img id="pv" alt="" style="display:none">
-    <div id="pvempty">Click “Show” on any row to preview its image here (500×500).</div>
+    <div id="pvempty">Click a thumbnail to preview its image here (500×500).</div>
     <div class="pvmeta"><span id="pvcap"></span><a id="pvlink" href="#" target="_blank" rel="noreferrer" style="display:none">open full size ↗</a></div>
   </div>
   <table>
@@ -144,7 +145,7 @@ function show(url, cap, tr){
   document.querySelectorAll('tr.active').forEach(function(t){t.classList.remove('active');});
   if(tr) tr.classList.add('active');
 }
-document.querySelectorAll('.show').forEach(function(b){
+document.querySelectorAll('.thumb').forEach(function(b){
   b.addEventListener('click', function(){ show(b.getAttribute('data-url'), b.getAttribute('data-cap'), b.closest('tr')); });
 });
 document.querySelectorAll('.rej').forEach(function(b){
