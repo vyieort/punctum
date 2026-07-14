@@ -90,3 +90,27 @@ export async function createCategory(
 export async function batchChangeInventory(cfg: SquareConfig, body: unknown): Promise<any> {
   return squareRequest(cfg, '/v2/inventory/changes/batch-create', { method: 'POST', body });
 }
+
+/** List every catalog ITEM object (follows the cursor to the end). */
+export async function listCatalogItems(cfg: SquareConfig): Promise<any[]> {
+  const items: any[] = [];
+  let cursor: string | undefined;
+  do {
+    const q = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
+    const j = await squareRequest(cfg, `/v2/catalog/list?types=ITEM${q}`, { method: 'GET' });
+    for (const o of j.objects ?? []) items.push(o);
+    cursor = j.cursor;
+  } while (cursor);
+  return items;
+}
+
+/** Batch-delete catalog objects (and their child variations) by id, 200 at a time. */
+export async function batchDeleteObjects(cfg: SquareConfig, ids: string[]): Promise<number> {
+  let deleted = 0;
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200);
+    await squareRequest(cfg, '/v2/catalog/batch-delete', { method: 'POST', body: { object_ids: chunk } });
+    deleted += chunk.length;
+  }
+  return deleted;
+}

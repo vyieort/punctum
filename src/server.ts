@@ -19,6 +19,7 @@ import { previewInvoiceImport } from './jobs/import-preview.js';
 import { provisionCategories } from './jobs/provision-categories.js';
 import { runComparison } from './jobs/compare.js';
 import { runImport } from './jobs/import.js';
+import { wipeSandboxCatalog } from './jobs/wipe.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -203,6 +204,44 @@ async function run(){
 </script>
 </body></html>`;
 
+// Danger button: wipe every item from the Square sandbox for a clean test re-run. Sandbox-only.
+const WIPE_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wipe sandbox catalog</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:2rem auto;max-width:680px;color:#1a1a1a;padding:0 1rem}
+  h2{margin:0 0 .5rem} p{color:#555}
+  .warn{background:#fef2f2;border:1px solid #f3b4b4;border-radius:6px;padding:.6rem .8rem;font-size:14px;color:#991b1b}
+  label{display:block;margin-top:1rem;font-size:14px}
+  button{margin-top:1rem;padding:.6rem 1.2rem;border:1px solid #b91c1c;background:#b91c1c;color:#fff;border-radius:6px;cursor:pointer;font:inherit}
+  button:disabled{opacity:.5;cursor:default}
+  #status{margin-top:1rem;color:#333;min-height:1.2em}
+  pre{margin-top:1rem;background:#0f1729;color:#dbe4ff;padding:1rem;border-radius:8px;overflow:auto;font-size:12.5px;max-height:60vh}
+</style></head>
+<body>
+  <h2>Wipe sandbox catalog</h2>
+  <p>Deletes <strong>all catalog items</strong> (with their variations + inventory) from the connected Square <strong>sandbox</strong> and clears Punctum's SKU&rarr;Square mapping. Categories are left intact; booking/appointment items are skipped.</p>
+  <div class="warn">Destructive and <strong>sandbox-only</strong> — it refuses to run if the connected Square account is production.</div>
+  <label><input type="checkbox" id="ack"> I understand this deletes every item in the sandbox.</label>
+  <button id="go" disabled onclick="run()">Wipe sandbox</button>
+  <div id="status"></div>
+  <pre id="out"></pre>
+<script>
+document.getElementById('ack').addEventListener('change',function(e){document.getElementById('go').disabled=!e.target.checked;});
+async function run(){
+  if(!confirm('Delete ALL items in the Square sandbox? This cannot be undone.')) return;
+  var b=document.getElementById('go'), s=document.getElementById('status'), o=document.getElementById('out');
+  b.disabled=true; s.textContent='Wiping sandbox catalog…';
+  try{
+    var res=await fetch('/jobs/sandbox/wipe?client=RE',{method:'POST'});
+    var j=await res.json();
+    if(res.ok){ s.textContent='Done — deleted '+j.itemsDeleted+' of '+j.itemsFound+' items, cleared '+j.mappingsCleared+' mappings ('+j.env+').'; o.textContent=JSON.stringify(j,null,2); }
+    else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }
+  }catch(e){ s.textContent='Error: '+e.message; b.disabled=false; }
+}
+</script>
+</body></html>`;
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
@@ -284,6 +323,25 @@ const server = createServer(async (req, res) => {
       }
       try {
         const result = await runImport(getPool() as unknown as Queryable, invoiceId);
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { error: (err as Error).message });
+      }
+      return;
+    }
+  }
+
+  // Wipe the Square sandbox catalog for a clean re-run: GET serves the button, POST does it.
+  if (url.pathname === '/jobs/sandbox/wipe') {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(WIPE_PAGE);
+      return;
+    }
+    if (req.method === 'POST') {
+      const client = url.searchParams.get('client') ?? 'RE';
+      try {
+        const result = await wipeSandboxCatalog(getPool() as unknown as Queryable, client);
         sendJson(res, 200, result);
       } catch (err) {
         sendJson(res, 500, { error: (err as Error).message });
