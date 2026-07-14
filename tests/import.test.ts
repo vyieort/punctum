@@ -66,7 +66,7 @@ test('new invoice: creates the item with all variations, receives inventory, wri
   const db = await seeded();
   const q = db as unknown as Queryable;
   const { ops, inventory } = fakeOps({}); // nothing exists -> create
-  const r = await runImport(q, 'RE', INV, { ops, locationId: 'LOC', occurredAt: '2026-07-13T00:00:00.000Z' });
+  const r = await runImport(q, INV, { ops, locationId: 'LOC', occurredAt: '2026-07-13T00:00:00.000Z' });
 
   assert.equal(r.itemsCreated, 1);
   assert.equal(r.variationsAdded, 2);
@@ -95,7 +95,7 @@ test('reorder: existing variation is restocked, missing variation is added', asy
       { id: 'ITEM1', item_data: { variations: [{ id: 'VX', item_variation_data: { name: '4MM White Opal', sku: 'NEO-1' } }] } },
     ],
   });
-  const r = await runImport(q, 'RE', INV, { ops, locationId: 'LOC', occurredAt: '2026-07-13T00:00:00.000Z' });
+  const r = await runImport(q, INV, { ops, locationId: 'LOC', occurredAt: '2026-07-13T00:00:00.000Z' });
 
   assert.equal(r.itemsCreated, 0);
   assert.equal(r.variationsRestocked, 1); // '4MM White Opal' already exists

@@ -23,6 +23,7 @@ export async function handleReview(
   method: string,
   invoiceId: string,
   action: string,
+  onApprove?: (invoiceId: string) => Promise<void>,
 ): Promise<HttpResult> {
   const data = await getInvoiceForReview(db, invoiceId);
   if (!data) return html(404, '<h1>Invoice not found</h1>');
@@ -32,6 +33,16 @@ export async function handleReview(
   }
   if (method === 'POST' && action === 'approve') {
     await approveInvoice(db, invoiceId);
+    // Auto-push to Square on approval. An import failure is recorded on the invoice status
+    // (runImport sets 'error') and can be retried via /jobs/import/run — it does not break
+    // the approve itself.
+    if (onApprove) {
+      try {
+        await onApprove(invoiceId);
+      } catch {
+        /* status reflects the failure */
+      }
+    }
     return redirect(`/invoices/${invoiceId}/review`);
   }
   if (method === 'POST' && action === 'reject') {

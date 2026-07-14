@@ -90,7 +90,6 @@ async function upsertMapping(
 
 export async function runImport(
   db: Queryable,
-  clientId: string,
   invoiceId: string,
   opts: ImportOptions = {},
 ): Promise<ImportResult> {
@@ -104,8 +103,9 @@ export async function runImport(
   if (!locationId) throw new Error('runImport: no Square location id');
   const occurredAt = opts.occurredAt ?? new Date().toISOString();
 
-  const inv = await db.query(`select vendor from invoices where id = $1`, [invoiceId]);
+  const inv = await db.query(`select client_id, vendor from invoices where id = $1`, [invoiceId]);
   if (inv.rows.length === 0) throw new Error(`invoice ${invoiceId} not found`);
+  const clientId = String((inv.rows[0] as { client_id: string }).client_id);
   const vendor = String((inv.rows[0] as { vendor: string | null }).vendor ?? '');
 
   const [{ items }, pricingRules, categoryMap] = await Promise.all([

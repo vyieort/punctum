@@ -15,8 +15,9 @@ function esc(v: unknown): string {
 export function renderReviewPage(data: InvoiceForReview): string {
   const { invoice, lines } = data;
   const status = invoice.status;
-  const statusClass =
-    status === 'approved' ? ' approved' : status === 'needs_review' ? ' rejected' : '';
+  const ok = status === 'approved' || status === 'done';
+  const bad = status === 'needs_review' || status === 'error';
+  const statusClass = ok ? ' approved' : bad ? ' rejected' : '';
 
   // Backorder is empty on most invoices; only surface the column when one line has it.
   const showBackorder = lines.some((l) => l.backorder);
@@ -80,7 +81,10 @@ export function renderReviewPage(data: InvoiceForReview): string {
         <form method="post" action="/invoices/${esc(invoice.id)}/reject"><button class="reject" type="submit">Reject / send back</button></form>
       </div>
       <div class="note">Read-only: confirm the parsed data matches the invoice, then Approve. If it&rsquo;s wrong, Reject &mdash; corrections are made at the source (re-parse), not here.</div>
-      ${status === 'approved' ? '<p>&#10003; Approved &mdash; queued for import.</p>' : ''}
+      ${status === 'done' ? '<p>&#10003; Approved &amp; pushed to Square.</p>' : ''}
+      ${status === 'importing' ? '<p>Pushing to Square&hellip;</p>' : ''}
+      ${status === 'approved' ? '<p>&#10003; Approved.</p>' : ''}
+      ${status === 'error' ? '<p>&#9888; Approved, but the Square push failed &mdash; retry from the import page.</p>' : ''}
       ${status === 'needs_review' ? '<p>&#8617; Sent back for re-parse.</p>' : ''}
     </div>
   </div>

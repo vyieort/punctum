@@ -278,13 +278,12 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'POST') {
       const invoiceId = url.searchParams.get('invoice');
-      const client = url.searchParams.get('client') ?? 'RE';
       if (!invoiceId) {
         sendJson(res, 400, { error: "missing required query param: 'invoice'" });
         return;
       }
       try {
-        const result = await runImport(getPool() as unknown as Queryable, client, invoiceId);
+        const result = await runImport(getPool() as unknown as Queryable, invoiceId);
         sendJson(res, 200, result);
       } catch (err) {
         sendJson(res, 500, { error: (err as Error).message });
@@ -386,11 +385,15 @@ const server = createServer(async (req, res) => {
   if (parts[0] === 'invoices' && parts.length === 3) {
     const [, invoiceId, action] = parts;
     try {
+      const pool = getPool() as unknown as Queryable;
       const result = await handleReview(
-        getPool() as unknown as Queryable,
+        pool,
         req.method ?? 'GET',
         invoiceId,
         action,
+        async (id) => {
+          await runImport(pool, id); // auto-push to Square on approval
+        },
       );
       res.writeHead(result.status, result.headers);
       res.end(result.body);

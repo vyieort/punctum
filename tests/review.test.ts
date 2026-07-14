@@ -44,6 +44,28 @@ test('approve flips status to approved', async () => {
   assert.equal((await getInvoiceForReview(q, INV))!.invoice.status, 'approved');
 });
 
+test('approve invokes the onApprove hook (auto-import trigger)', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  let calledWith = '';
+  const r = await handleReview(q, 'POST', INV, 'approve', async (id) => {
+    calledWith = id;
+  });
+  assert.equal(r.status, 303);
+  assert.equal(calledWith, INV);
+  assert.equal((await getInvoiceForReview(q, INV))!.invoice.status, 'approved');
+});
+
+test('approve still succeeds even if the import hook throws', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  const r = await handleReview(q, 'POST', INV, 'approve', async () => {
+    throw new Error('square down');
+  });
+  assert.equal(r.status, 303); // the import failure does not break the approve
+  assert.equal((await getInvoiceForReview(q, INV))!.invoice.status, 'approved');
+});
+
 test('reject sends the invoice back to needs_review', async () => {
   const db = await seeded();
   const q = db as unknown as Queryable;
