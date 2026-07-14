@@ -8,6 +8,7 @@
 import type { Queryable } from './pg-rows.js';
 import { fillSkus } from '../lib/sku.js';
 import { extractAndClassify, type MergedInvoice } from '../lib/merged.js';
+import { normalizeClassification } from '../lib/normalize.js';
 import type { ClassifiedItem } from '../lib/classify.js';
 import type { AnthropicOptions } from '../lib/anthropic.js';
 
@@ -40,7 +41,9 @@ export async function ingestInvoice(
   extract: Extractor = extractAndClassify,
 ): Promise<IngestResult> {
   const merged = await extract(input.pdfBase64);
-  const lines = fillSkus(merged.vendor_name, merged.items) as unknown as ClassifiedItem[];
+  const lines = (fillSkus(merged.vendor_name, merged.items) as unknown as ClassifiedItem[]).map(
+    normalizeClassification,
+  );
 
   const inv = await db.query(
     `insert into invoices (client_id, vendor, invoice_number, invoice_date, total, status, pdf_storage_path)
