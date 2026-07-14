@@ -122,6 +122,17 @@ export async function queueInvoice(
   return { invoiceId: (inv.rows[0] as { id: string }).id };
 }
 
+/** Re-queue errored invoices that still have their PDF, so the worker retries them. */
+export async function requeueErrored(db: Queryable, clientId: string): Promise<{ requeued: number }> {
+  const r = await db.query(
+    `update invoices set status = 'queued', updated_at = now()
+       where client_id = $1 and status = 'error' and pdf_bytes is not null
+       returning id`,
+    [clientId],
+  );
+  return { requeued: r.rows.length };
+}
+
 export interface ProcessResult {
   ok: boolean;
   vendorName?: string;
@@ -139,9 +150,11 @@ export async function processQueuedInvoice(
   if (q.rows.length === 0) return { ok: false, error: 'invoice not found' };
   const pdfB64 = (q.rows[0] as { pdf_b64: string | null }).pdf_b64;
   if (!pdfB64) return { ok: false, error: 'no pdf bytes' };
+  // Postgres encode(...,'base64') wraps output at 76 cols; the AI needs it unwrapped.
+  const cleanB64 = pdfB64.replace(/\s+/g, '');
 
   try {
-    const merged = await extract(pdfB64); // the stored PDF is already compressed
+    const merged = await extract(cleanB64); // the stored PDF is already compressed
     await db.query(
       `update invoices set vendor = $2, invoice_number = $3, invoice_date = $4, total = $5,
               status = 'in_review', pdf_bytes = null, updated_at = now()

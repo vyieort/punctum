@@ -88,7 +88,13 @@ export function renderReviewPage(data: InvoiceForReview): string {
       ${status === 'done' ? '<p>&#10003; Approved &amp; pushed to Square.</p>' : ''}
       ${status === 'importing' ? '<p>Pushing to Square&hellip;</p>' : ''}
       ${status === 'approved' ? '<p>&#10003; Approved.</p>' : ''}
-      ${status === 'error' ? '<p>&#9888; Approved, but the Square push failed &mdash; retry from the import page.</p>' : ''}
+      ${
+        status === 'error'
+          ? lines.length === 0
+            ? '<p>&#9888; Couldn&rsquo;t extract this invoice &mdash; retry it from the queue.</p>'
+            : '<p>&#9888; Approved, but the Square push failed &mdash; retry from the import page.</p>'
+          : ''
+      }
       ${status === 'needs_review' ? '<p>&#8617; Sent back for re-parse.</p>' : ''}
     </div>
   </div>

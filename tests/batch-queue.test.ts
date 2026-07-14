@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import type { Queryable } from '../src/jobs/pg-rows.js';
-import { queueInvoice, processQueuedInvoice } from '../src/jobs/intake.js';
+import { queueInvoice, processQueuedInvoice, requeueErrored } from '../src/jobs/intake.js';
 import { processNextQueued } from '../src/jobs/worker.js';
 import type { MergedInvoice } from '../src/lib/merged.js';
 import type { ClassifiedItem } from '../src/lib/classify.js';
@@ -88,6 +88,34 @@ test('processQueuedInvoice keeps bytes + marks error when extraction throws', as
   ).rows[0]!;
   assert.equal(inv.status, 'error');
   assert.equal(inv.has_pdf, true); // kept so it can be retried
+});
+
+test('processQueuedInvoice hands the extractor UNwrapped base64 (PG encode wraps at 76)', async () => {
+  const db = await seeded();
+  const big = Buffer.from('%PDF-1.4 ' + 'x'.repeat(300)).toString('base64'); // long enough that PG wraps it
+  const { invoiceId } = await queueInvoice(db as unknown as Queryable, 'RE', { pdfBase64: big });
+  let received = '';
+  const capture = async (b64: string): Promise<MergedInvoice> => {
+    received = b64;
+    return { vendor_name: 'V', invoice_number: '', invoice_date: '', invoice_total: 0, items: [] };
+  };
+  const r = await processQueuedInvoice(db as unknown as Queryable, invoiceId, capture);
+  assert.equal(r.ok, true);
+  assert.doesNotMatch(received, /\s/); // no wrapping whitespace reaches the AI
+  assert.equal(received, big); // round-trips to the exact original base64
+});
+
+test('requeueErrored re-queues errored invoices that still have their PDF', async () => {
+  const db = await seeded();
+  const { invoiceId } = await queueInvoice(db as unknown as Queryable, 'RE', { pdfBase64: PDF_B64 });
+  const boom = async (): Promise<MergedInvoice> => {
+    throw new Error('AI down');
+  };
+  await processQueuedInvoice(db as unknown as Queryable, invoiceId, boom); // -> error, bytes kept
+  const { requeued } = await requeueErrored(db as unknown as Queryable, 'RE');
+  assert.equal(requeued, 1);
+  const st = (await db.query<{ status: string }>(`select status::text as status from invoices where id=$1`, [invoiceId])).rows[0]!;
+  assert.equal(st.status, 'queued');
 });
 
 test('processNextQueued drains the queue oldest-first', async () => {

@@ -107,7 +107,9 @@ ${working ? '<meta http-equiv="refresh" content="8">' : ''}
 <style>
   body{font-family:system-ui,-apple-system,sans-serif;margin:1.5rem auto;max-width:1000px;color:#1a1a1a;padding:0 1rem}
   h2{margin:0 0 .25rem} .sub{color:#555;margin:0 0 1rem;font-size:14px}
-  a.btn{display:inline-block;margin-bottom:1rem;color:#166534;font-size:14px}
+  a.btn{display:inline-block;margin:0 1rem 1rem 0;color:#166534;font-size:14px}
+  button.retry{font:inherit;font-size:13px;padding:.3rem .7rem;border:1px solid #b45309;color:#b45309;background:#fff;border-radius:6px;cursor:pointer;margin-bottom:1rem}
+  button.retry:disabled{opacity:.6}
   table{border-collapse:collapse;width:100%;font-size:13px}
   th,td{border-bottom:1px solid #eee;padding:.5rem .6rem;text-align:left;vertical-align:top}
   th{color:#666;font-weight:600} td.ctr{text-align:center}
@@ -119,9 +121,17 @@ ${working ? '<meta http-equiv="refresh" content="8">' : ''}
   <h2>Review queue</h2>
   <p class="sub">${rows.length} invoices${countLine ? ' — ' + esc(countLine) : ''}.${working ? ' Refreshing while items extract…' : ''}</p>
   <a class="btn" href="/invoices/batch">+ Upload more invoices</a>
+  ${counts.error ? `<button class="retry" onclick="retryErrored(this)">Retry ${counts.error} errored</button>` : ''}
   <table>
     <thead><tr><th>Uploaded</th><th>Vendor</th><th>Invoice #</th><th>Lines</th><th>Total</th><th>Status</th><th></th></tr></thead>
     <tbody>${body}</tbody>
   </table>
+<script>
+async function retryErrored(b){
+  b.disabled=true; b.textContent='Re-queuing…';
+  try{ await fetch('/queue/retry?client=RE',{method:'POST'}); location.reload(); }
+  catch(e){ b.disabled=false; alert(e.message); }
+}
+</script>
 </body></html>`;
 }

@@ -13,7 +13,7 @@ import { generateTags, type TagInputRow } from './lib/tagger.js';
 import { getPool } from './db/pool.js';
 import { runTagsJob, type Queryable } from './jobs/pg-rows.js';
 import { handleReview } from './review/handler.js';
-import { ingestInvoice, queueInvoice } from './jobs/intake.js';
+import { ingestInvoice, queueInvoice, requeueErrored } from './jobs/intake.js';
 import { startWorker } from './jobs/worker.js';
 import { getQueueRows, renderQueuePage } from './review/queue.js';
 import { squareConfigFromEnv, listLocations } from './lib/square-client.js';
@@ -639,6 +639,18 @@ const server = createServer(async (req, res) => {
         pdfBase64: pdf.toString('base64'),
         filename,
       });
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  // Re-queue every errored invoice that still has its PDF (worker retries them).
+  if (url.pathname === '/queue/retry' && req.method === 'POST') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    try {
+      const result = await requeueErrored(getPool() as unknown as Queryable, client);
       sendJson(res, 200, result);
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
