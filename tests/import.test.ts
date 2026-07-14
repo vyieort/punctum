@@ -36,12 +36,17 @@ async function seeded(): Promise<PGlite> {
 
 function fakeOps(searchResults: Record<string, unknown[]>) {
   const inventory: Array<{ catalog_object_id: string; quantity: string }> = [];
+  const createdNames: string[] = [];
   let n = 0;
   const ops: SquareOps = {
-    search: async (name) => (searchResults[name] as never[]) ?? [],
+    // '*' acts as a catch-all so a test can match any (suffixed) name.
+    search: async (name) => (searchResults[name] as never[]) ?? (searchResults['*'] as never[]) ?? [],
     upsert: async (body) => {
-      const b = body as { object: { type: string; item_data?: { variations: Array<{ item_variation_data: { sku: string } }> } } };
+      const b = body as {
+        object: { type: string; item_data?: { name?: string; variations: Array<{ item_variation_data: { sku: string } }> } };
+      };
       if (b.object.type === 'ITEM') {
+        createdNames.push(b.object.item_data!.name ?? '');
         return {
           catalog_object: {
             id: 'ITEM1',
@@ -59,13 +64,13 @@ function fakeOps(searchResults: Record<string, unknown[]>) {
       return {};
     },
   };
-  return { ops, inventory };
+  return { ops, inventory, createdNames };
 }
 
 test('new invoice: creates the item with all variations, receives inventory, writes mapping', async () => {
   const db = await seeded();
   const q = db as unknown as Queryable;
-  const { ops, inventory } = fakeOps({}); // nothing exists -> create
+  const { ops, inventory, createdNames } = fakeOps({}); // nothing exists -> create
   const r = await runImport(q, INV, { ops, locationId: 'LOC', occurredAt: '2026-07-13T00:00:00.000Z' });
 
   assert.equal(r.itemsCreated, 1);
@@ -74,6 +79,7 @@ test('new invoice: creates the item with all variations, receives inventory, wri
   assert.equal(r.inventoryAdjusted, 2);
   assert.equal(r.errors.length, 0);
   assert.deepEqual(inventory.map((i) => i.catalog_object_id).sort(), ['V1', 'V2']);
+  assert.match(createdNames[0]!, /^18G 4MM Threadless Bezel-Set \[NEO /); // POS tags folded into the name
 
   const map = await db.query<{ vendor_sku: string; square_item_id: string; square_variation_id: string; retail_price: string; status: string }>(
     `select vendor_sku, square_item_id, square_variation_id, retail_price::text as retail_price, status
@@ -88,23 +94,35 @@ test('new invoice: creates the item with all variations, receives inventory, wri
   assert.equal(inv.rows[0]!.status, 'done');
 });
 
-test('reorder: existing variation is restocked, missing variation is added', async () => {
+test('reorder via mapping: mapped SKU is restocked, new SKU is added (suffix-safe)', async () => {
   const db = await seeded();
   const q = db as unknown as Queryable;
-  const { ops } = fakeOps({
-    '18G 4MM Threadless Bezel-Set': [
-      { id: 'ITEM1', item_data: { variations: [{ id: 'VX', item_variation_data: { name: '4MM White Opal', sku: 'NEO-1' } }] } },
-    ],
-  });
+  // NEO-1 was pushed on a prior import; the mapping resolves the item by SKU (no name search).
+  await db.exec(`insert into catalog_mapping (client_id, vendor, vendor_sku, square_item_id, square_variation_id, item_name, variation_name, status)
+    values ('RE','NeoMetal','NEO-1','ITEM1','VX','18G 4MM Threadless Bezel-Set [NEO 18g BZL TL OPL]','4MM White Opal','PENDING')`);
+  const { ops } = fakeOps({}); // deliberately no search results — mapping must resolve it
   const r = await runImport(q, INV, { ops, locationId: 'LOC', occurredAt: '2026-07-13T00:00:00.000Z' });
 
   assert.equal(r.itemsCreated, 0);
-  assert.equal(r.variationsRestocked, 1); // '4MM White Opal' already exists
-  assert.equal(r.variationsAdded, 1); // '4MM Champagne' is new
+  assert.equal(r.variationsRestocked, 1); // NEO-1 already mapped
+  assert.equal(r.variationsAdded, 1); // NEO-2 is new
   assert.equal(r.inventoryAdjusted, 2);
 
   const opal = await db.query<{ square_variation_id: string }>(
     `select square_variation_id from catalog_mapping where client_id='RE' and vendor_sku='NEO-1'`,
   );
-  assert.equal(opal.rows[0]!.square_variation_id, 'VX'); // restocked existing variation
+  assert.equal(opal.rows[0]!.square_variation_id, 'VX'); // restocked the existing variation
+});
+
+test('reorder via name-search fallback when the SKU is not yet mapped', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  const { ops } = fakeOps({
+    '*': [{ id: 'ITEM1', item_data: { variations: [{ id: 'VX', item_variation_data: { name: '4MM White Opal', sku: 'NEO-1' } }] } }],
+  });
+  const r = await runImport(q, INV, { ops, locationId: 'LOC', occurredAt: '2026-07-13T00:00:00.000Z' });
+
+  assert.equal(r.itemsCreated, 0);
+  assert.equal(r.variationsRestocked, 1); // matched by variation name from the search result
+  assert.equal(r.variationsAdded, 1);
 });

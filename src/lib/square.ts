@@ -10,6 +10,8 @@
 // Square client (added later) consumes createItemBody / addVariationBody /
 // inventoryAdjustBody and POSTs them.
 
+import { generateTags } from './tagger.js';
+
 /** A classified + priced invoice line, ready to be grouped into a catalog item. */
 export interface ImportLine {
   item_name: string; // shared across variations of one product (the grouping key)
@@ -30,11 +32,12 @@ export interface PlannedVariation {
 }
 
 export interface PlannedItem {
-  item_name: string;
+  item_name: string; // base name (no tag suffix)
   category_ids: string[]; // [leaf, vendor?]
   reporting_category_id: string;
   variations: PlannedVariation[];
   description_html?: string;
+  tags?: string; // POS search-suffix codes (space-joined), appended to the Square name
 }
 
 /**
@@ -86,6 +89,28 @@ export function planItems(lines: ImportLine[]): PlannedItem[] {
 
 const skuSlug = (v: string): string => v.toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 24);
 
+/**
+ * Compute the POS search-suffix tag string for a planned item (vendor + its variations),
+ * using the ported Sc2.5 tagger. Empty when the tagger produces nothing.
+ */
+export function computePosTags(vendor: string, item: PlannedItem): string {
+  if (item.variations.length === 0) return '';
+  const rows = item.variations.map((v, i) => ({
+    vendor,
+    itemName: item.item_name,
+    variationName: v.variation_name,
+    catalogId: item.item_name || 'item', // generateTags requires a non-empty group id
+    rowNumber: i + 1,
+  }));
+  return generateTags(rows).tags;
+}
+
+/** The Square-facing item name: base name plus the `[TAGS]` search suffix when present. */
+export function displayName(item: Pick<PlannedItem, 'item_name' | 'tags'>): string {
+  const tags = (item.tags ?? '').trim();
+  return tags ? `${item.item_name} [${tags}]` : item.item_name;
+}
+
 const variationData = (v: PlannedVariation) => ({
   name: v.variation_name,
   sku: v.sku,
@@ -102,7 +127,7 @@ export function createItemBody(item: PlannedItem, opts: { idempotencyKey: string
       type: 'ITEM',
       id: '#new-item',
       item_data: {
-        name: item.item_name,
+        name: displayName(item),
         ...(item.description_html ? { description_html: item.description_html } : {}),
         categories: item.category_ids.map((id) => ({ id })),
         reporting_category: { id: item.reporting_category_id },

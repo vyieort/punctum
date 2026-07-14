@@ -7,6 +7,8 @@ import {
   createItemBody,
   addVariationBody,
   inventoryAdjustBody,
+  computePosTags,
+  displayName,
   type ImportLine,
 } from '../src/lib/square.js';
 
@@ -66,6 +68,28 @@ test('planItems keeps distinct item_names as separate items, in order', () => {
     items.map((i) => i.item_name),
     ['Muse Seam Ring', 'Threadless Disk'],
   );
+});
+
+test('computePosTags builds the vendor+attribute suffix; displayName brackets it onto the name', () => {
+  const [item] = planItems([
+    line({ item_name: '18G Seam Ring', variation_name: 'Y14K', sku: 'S-Y' }),
+    line({ item_name: '18G Seam Ring', variation_name: 'R14K', sku: 'S-R' }),
+  ]);
+  item!.tags = computePosTags('BVLA', item!);
+  assert.match(item!.tags, /^BVLA /); // vendor tag first (contract)
+  assert.match(item!.tags, /18g/); // gauge pulled from the item name
+  assert.equal(displayName(item!), `18G Seam Ring [${item!.tags}]`);
+});
+
+test('displayName is the bare name when there are no tags', () => {
+  assert.equal(displayName({ item_name: 'Plain Item' }), 'Plain Item');
+});
+
+test('createItemBody puts the tag suffix in the Square item name', () => {
+  const [item] = planItems([line({ item_name: '18G Seam Ring', variation_name: 'Y14K', sku: 'S-Y' })]);
+  item!.tags = 'BVLA 18g SMR';
+  const body = createItemBody(item!, { idempotencyKey: 'k' });
+  assert.equal(body.object.item_data.name, '18G Seam Ring [BVLA 18g SMR]');
 });
 
 test('createItemBody builds an ITEM with all variations, categories, and fixed pricing', () => {

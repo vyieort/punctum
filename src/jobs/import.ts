@@ -17,7 +17,16 @@ import {
 } from '../lib/square-client.js';
 import { loadClassifiedProducts, loadPricingRules, loadCategoryMap } from './import-preview.js';
 import { toImportLines } from '../lib/import-map.js';
-import { planItems, createItemBody, addVariationBody, inventoryAdjustBody, type PlannedVariation } from '../lib/square.js';
+import {
+  planItems,
+  createItemBody,
+  addVariationBody,
+  inventoryAdjustBody,
+  computePosTags,
+  displayName,
+  type PlannedItem,
+  type PlannedVariation,
+} from '../lib/square.js';
 
 interface SquareVariation {
   id?: string;
@@ -62,7 +71,16 @@ const norm = (v: unknown): string => String(v ?? '').trim().toLowerCase();
 async function upsertMapping(
   db: Queryable,
   clientId: string,
-  row: { vendor: string; sku: string; itemId: string; variationId: string; itemName: string; variationName: string; retailCents: number },
+  row: {
+    vendor: string;
+    sku: string;
+    itemId: string;
+    variationId: string;
+    itemName: string;
+    variationName: string;
+    retailCents: number;
+    tags: string;
+  },
 ): Promise<void> {
   const retail = row.retailCents / 100;
   const found = await db.query(
@@ -74,19 +92,47 @@ async function upsertMapping(
     await db.query(
       `update catalog_mapping
          set square_item_id = $1, square_variation_id = $2, item_name = $3, variation_name = $4,
-             retail_price = $5, status = 'PENDING', times_ordered = $6, last_ordered = now()::date, updated_at = now()
-       where id = $7`,
-      [row.itemId, row.variationId, row.itemName, row.variationName, retail, (r.times_ordered ?? 0) + 1, r.id],
+             retail_price = $5, tags = $6, status = 'PENDING', times_ordered = $7,
+             last_ordered = now()::date, updated_at = now()
+       where id = $8`,
+      [row.itemId, row.variationId, row.itemName, row.variationName, retail, row.tags, (r.times_ordered ?? 0) + 1, r.id],
     );
   } else {
     await db.query(
       `insert into catalog_mapping
          (client_id, vendor, vendor_sku, square_item_id, square_variation_id, item_name, variation_name,
-          retail_price, status, times_ordered, first_seen, last_ordered)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING', 1, now()::date, now()::date)`,
-      [clientId, row.vendor || null, row.sku, row.itemId, row.variationId, row.itemName, row.variationName, retail],
+          retail_price, tags, status, times_ordered, first_seen, last_ordered)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'PENDING', 1, now()::date, now()::date)`,
+      [clientId, row.vendor || null, row.sku, row.itemId, row.variationId, row.itemName, row.variationName, retail, row.tags],
     );
   }
+}
+
+/**
+ * Find an already-created Square item for this planned item via our own mapping, keyed by
+ * variation SKU — so it works regardless of the tag suffix in the Square name (and avoids
+ * Square catalog search's read-your-writes lag). Returns null if none of the SKUs are mapped.
+ */
+async function resolveExisting(
+  db: Queryable,
+  clientId: string,
+  item: PlannedItem,
+): Promise<{ itemId: string; varIdBySku: Map<string, string> } | null> {
+  const skus = item.variations.map((v) => v.sku).filter(Boolean);
+  if (skus.length === 0) return null;
+  const { rows } = await db.query(
+    `select vendor_sku, square_item_id, square_variation_id
+       from catalog_mapping
+      where client_id = $1 and vendor_sku = any($2) and coalesce(square_item_id, '') <> ''`,
+    [clientId, skus],
+  );
+  if (rows.length === 0) return null;
+  const itemId = String((rows[0] as { square_item_id: string }).square_item_id);
+  const varIdBySku = new Map<string, string>();
+  for (const r of rows as Array<{ vendor_sku: string; square_variation_id: string | null }>) {
+    if (r.square_variation_id) varIdBySku.set(String(r.vendor_sku), String(r.square_variation_id));
+  }
+  return { itemId, varIdBySku };
 }
 
 export async function runImport(
@@ -115,6 +161,8 @@ export async function runImport(
     loadCategoryMap(db, clientId),
   ]);
   const planned = planItems(toImportLines(items, { pricingRules, categoryMap }).lines);
+  // POS search-suffix tags, folded into this single push (name gets a [TAGS] suffix on create).
+  for (const item of planned) item.tags = computePosTags(vendor, item);
 
   await db.query(`update invoices set status = 'importing', updated_at = now() where id = $1`, [invoiceId]);
   const result: ImportResult = {
@@ -125,16 +173,32 @@ export async function runImport(
   // doesn't abort the rest of the invoice.
   for (const item of planned) {
     try {
-      const found = await ops.search(item.item_name);
+      // Resolve an existing Square item: prefer our mapping (keyed by SKU, so it's immune to
+      // the tag suffix in the name), then fall back to an exact-name search on the full name.
+      const mapped = await resolveExisting(db, clientId, item);
+      let itemId = mapped?.itemId ?? '';
+      const existingBySku = mapped?.varIdBySku ?? new Map<string, string>();
+      const existingByName = new Map<string, string>();
+      if (!itemId) {
+        const found = await ops.search(displayName(item));
+        if (found.length > 0) {
+          itemId = found[0]?.id ?? '';
+          for (const ev of found[0]?.item_data?.variations ?? []) {
+            const nm = norm(ev.item_variation_data?.name);
+            if (nm && ev.id) existingByName.set(nm, ev.id);
+          }
+        }
+      }
+
       const resolved: Array<{ v: PlannedVariation; itemId: string; variationId: string }> = [];
 
-      if (found.length === 0) {
-        // New item — create it with all its variations in one call.
+      if (!itemId) {
+        // New item — create it with all its variations (name carries the [TAGS] suffix).
         const resp = await ops.upsert(
           createItemBody(item, { idempotencyKey: `${invoiceId}:item:${item.variations[0]?.sku ?? item.item_name}` }),
         );
         const created = resp.catalog_object;
-        const itemId = created?.id ?? '';
+        itemId = created?.id ?? '';
         const idBySku = new Map<string, string>();
         for (const cv of created?.item_data?.variations ?? []) {
           const sku = cv.item_variation_data?.sku;
@@ -146,15 +210,10 @@ export async function runImport(
           result.variationsAdded++;
         }
       } else {
-        // Existing item — add only variations that aren't already present.
-        const itemId = found[0]?.id ?? '';
-        const existingByName = new Map<string, string>();
-        for (const ev of found[0]?.item_data?.variations ?? []) {
-          const nm = norm(ev.item_variation_data?.name);
-          if (nm && ev.id) existingByName.set(nm, ev.id);
-        }
+        // Existing item — restock variations we already have (matched by SKU via the mapping,
+        // else by variation name from the search), add the ones we don't.
         for (const v of item.variations) {
-          const existingId = existingByName.get(norm(v.variation_name));
+          const existingId = existingBySku.get(v.sku) ?? existingByName.get(norm(v.variation_name));
           if (existingId) {
             resolved.push({ v, itemId, variationId: existingId });
             result.variationsRestocked++;
@@ -166,7 +225,7 @@ export async function runImport(
         }
       }
 
-      for (const { v, itemId, variationId } of resolved) {
+      for (const { v, itemId: iid, variationId } of resolved) {
         if (variationId) {
           await ops.inventory(
             inventoryAdjustBody(variationId, v.qty, { locationId, occurredAt, idempotencyKey: `${invoiceId}:inv:${v.sku}` }),
@@ -176,11 +235,12 @@ export async function runImport(
         await upsertMapping(db, clientId, {
           vendor,
           sku: v.sku,
-          itemId,
+          itemId: iid,
           variationId,
-          itemName: item.item_name,
+          itemName: displayName(item),
           variationName: v.variation_name,
           retailCents: v.retail_cents,
+          tags: item.tags ?? '',
         });
       }
     } catch (e) {

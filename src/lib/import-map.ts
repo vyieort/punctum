@@ -66,6 +66,9 @@ export function toImportLine(item: ClassifiedItem, cfg: BridgeConfig): BridgeRes
   const itemName =
     String(item.item_name ?? '').trim() || String(item.description ?? '').trim().slice(0, 60) || 'Unnamed Item';
 
+  // Real item description for Square (replaces Sc2's grouping_key-as-description hack).
+  const descriptionHtml = String(item.description ?? '').trim();
+
   const line: ImportLine = {
     item_name: itemName,
     variation_name: String(item.variation_name ?? '').trim(),
@@ -74,6 +77,7 @@ export function toImportLine(item: ClassifiedItem, cfg: BridgeConfig): BridgeRes
     qty: parseInt(String(item.qty ?? '1'), 10) || 1,
     category_id: categoryId,
     ...(vendorCategoryId ? { vendor_category_id: vendorCategoryId } : {}),
+    ...(descriptionHtml ? { description_html: descriptionHtml } : {}),
   };
   return { line, flagged, flagReason };
 }

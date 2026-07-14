@@ -69,6 +69,19 @@ test('empty item_name falls back to the description so Square gets a name', () =
   assert.equal(r.line!.item_name, 'Titanium Bezel 4mm White Opal');
 });
 
+test('carries the item description into description_html for the push', () => {
+  const r = toImportLine(
+    ci({ vendor: 'NeoMetal', product_type: 'THREADLESS_END', setting: 'bezel', price: '20', item_name: '18G Bezel', description: 'Titanium Bezel 4mm White Opal', sku: 'NEO-9' }),
+    CFG,
+  );
+  assert.equal(r.line!.description_html, 'Titanium Bezel 4mm White Opal');
+});
+
+test('no description leaves description_html unset', () => {
+  const r = toImportLine(ci({ product_type: 'THREADLESS_END', setting: 'bezel', item_name: 'X', description: '', sku: 'Y' }), CFG);
+  assert.equal(r.line!.description_html, undefined);
+});
+
 test('toImportLines aggregates: keeps products, counts skips + flags', () => {
   const out = toImportLines(
     [
