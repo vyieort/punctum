@@ -33,7 +33,12 @@ export async function anthropicText(
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
     },
-    body: JSON.stringify({ model: req.model, max_tokens: req.maxTokens, system: req.system, messages: req.messages }),
+    body: JSON.stringify({
+      model: req.model,
+      max_tokens: req.maxTokens,
+      ...(req.system ? { system: req.system } : {}), // omit empty system (e.g. the Vision call)
+      messages: req.messages,
+    }),
   });
 
   if (!res.ok) {

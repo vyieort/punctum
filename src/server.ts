@@ -20,6 +20,7 @@ import { provisionCategories } from './jobs/provision-categories.js';
 import { runComparison } from './jobs/compare.js';
 import { runImport } from './jobs/import.js';
 import { wipeSandboxCatalog } from './jobs/wipe.js';
+import { enrichImages } from './jobs/enrich-images.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -204,6 +205,46 @@ async function run(){
 </script>
 </body></html>`;
 
+// Image enrichment: find a matching photo (SerpAPI + Vision) and attach it to each freshly
+// imported variation. Slow, so it runs a bounded batch per click.
+const IMAGES_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enrich images</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:2rem auto;max-width:680px;color:#1a1a1a;padding:0 1rem}
+  h2{margin:0 0 .5rem} p{color:#555}
+  label{font-size:14px;color:#333}
+  input[type=number]{width:5rem;font:inherit;padding:.2rem .4rem}
+  .warn{background:#fff8e1;border:1px solid #f2d98a;border-radius:6px;padding:.6rem .8rem;font-size:14px;color:#7a5b00}
+  button{margin-top:1rem;padding:.6rem 1.2rem;border:1px solid #166534;background:#166534;color:#fff;border-radius:6px;cursor:pointer;font:inherit}
+  button:disabled{opacity:.5;cursor:default}
+  #status{margin-top:1rem;color:#333;min-height:1.2em}
+  pre{margin-top:1rem;background:#0f1729;color:#dbe4ff;padding:1rem;border-radius:8px;overflow:auto;font-size:12.5px;max-height:60vh}
+</style></head>
+<body>
+  <h2>Enrich images</h2>
+  <p>Finds a matching product photo for each newly imported variation (SerpAPI search &rarr; Claude Vision pick) and attaches it to the Square <strong>sandbox</strong> item. Variations that already have an image are skipped.</p>
+  <div class="warn">Each item costs a SerpAPI + a Vision call, so this runs a bounded batch. Re-click to keep going.</div>
+  <p><label>Batch size: <input type="number" id="limit" value="10" min="1" max="100"></label></p>
+  <button id="go" onclick="run()">Enrich next batch</button>
+  <div id="status"></div>
+  <pre id="out"></pre>
+<script>
+async function run(){
+  var b=document.getElementById('go'), s=document.getElementById('status'), o=document.getElementById('out');
+  var limit=document.getElementById('limit').value||10;
+  b.disabled=true; s.textContent='Enriching up to '+limit+' variations — this can take a bit…';
+  try{
+    var res=await fetch('/jobs/images/run?client=RE&limit='+encodeURIComponent(limit),{method:'POST'});
+    var j=await res.json();
+    if(res.ok){ s.textContent='Done — '+j.enriched+' enriched, '+j.noImage+' no match, '+j.skipped+' already had an image ('+j.processed+' processed).'; o.textContent=JSON.stringify(j,null,2); }
+    else { s.textContent='Error: '+(j.error||res.status); }
+  }catch(e){ s.textContent='Error: '+e.message; }
+  b.disabled=false;
+}
+</script>
+</body></html>`;
+
 // Danger button: wipe every item from the Square sandbox for a clean test re-run. Sandbox-only.
 const WIPE_PAGE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -323,6 +364,26 @@ const server = createServer(async (req, res) => {
       }
       try {
         const result = await runImport(getPool() as unknown as Queryable, invoiceId);
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { error: (err as Error).message });
+      }
+      return;
+    }
+  }
+
+  // Image enrichment: GET serves the button, POST runs a bounded batch (SerpAPI + Vision + attach).
+  if (url.pathname === '/jobs/images/run') {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(IMAGES_PAGE);
+      return;
+    }
+    if (req.method === 'POST') {
+      const client = url.searchParams.get('client') ?? 'RE';
+      const limit = Number(url.searchParams.get('limit')) || 10;
+      try {
+        const result = await enrichImages(getPool() as unknown as Queryable, client, { limit });
         sendJson(res, 200, result);
       } catch (err) {
         sendJson(res, 500, { error: (err as Error).message });

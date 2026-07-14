@@ -80,6 +80,7 @@ async function upsertMapping(
     variationName: string;
     retailCents: number;
     tags: string;
+    itemDescription: string;
   },
 ): Promise<void> {
   const retail = row.retailCents / 100;
@@ -92,18 +93,18 @@ async function upsertMapping(
     await db.query(
       `update catalog_mapping
          set square_item_id = $1, square_variation_id = $2, item_name = $3, variation_name = $4,
-             retail_price = $5, tags = $6, status = 'PENDING', times_ordered = $7,
+             retail_price = $5, tags = $6, item_description = $7, status = 'PENDING', times_ordered = $8,
              last_ordered = now()::date, updated_at = now()
-       where id = $8`,
-      [row.itemId, row.variationId, row.itemName, row.variationName, retail, row.tags, (r.times_ordered ?? 0) + 1, r.id],
+       where id = $9`,
+      [row.itemId, row.variationId, row.itemName, row.variationName, retail, row.tags, row.itemDescription, (r.times_ordered ?? 0) + 1, r.id],
     );
   } else {
     await db.query(
       `insert into catalog_mapping
          (client_id, vendor, vendor_sku, square_item_id, square_variation_id, item_name, variation_name,
-          retail_price, tags, status, times_ordered, first_seen, last_ordered)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'PENDING', 1, now()::date, now()::date)`,
-      [clientId, row.vendor || null, row.sku, row.itemId, row.variationId, row.itemName, row.variationName, retail, row.tags],
+          retail_price, tags, item_description, status, times_ordered, first_seen, last_ordered)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'PENDING', 1, now()::date, now()::date)`,
+      [clientId, row.vendor || null, row.sku, row.itemId, row.variationId, row.itemName, row.variationName, retail, row.tags, row.itemDescription],
     );
   }
 }
@@ -241,6 +242,7 @@ export async function runImport(
           variationName: v.variation_name,
           retailCents: v.retail_cents,
           tags: item.tags ?? '',
+          itemDescription: item.description_html ?? '',
         });
       }
     } catch (e) {

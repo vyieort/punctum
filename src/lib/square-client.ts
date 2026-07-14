@@ -91,6 +91,58 @@ export async function batchChangeInventory(cfg: SquareConfig, body: unknown): Pr
   return squareRequest(cfg, '/v2/inventory/changes/batch-create', { method: 'POST', body });
 }
 
+/** Existing image ids on a variation — used to skip enrichment when one is already set. */
+export async function getVariationImageIds(cfg: SquareConfig, variationId: string): Promise<string[]> {
+  const j = await squareRequest(cfg, `/v2/catalog/object/${variationId}`, { method: 'GET' });
+  return j.object?.item_variation_data?.image_ids ?? [];
+}
+
+/** Fetch an image URL to bytes (for the multipart upload Square requires). */
+export async function downloadImage(
+  url: string,
+  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
+): Promise<{ bytes: Buffer; contentType: string }> {
+  const res = await fetchImpl(url, { headers: { accept: 'image/jpeg, image/png, image/gif' } });
+  if (!res.ok) throw new Error(`image download ${res.status} ${url.slice(0, 120)}`);
+  const contentType = res.headers.get('content-type') ?? 'image/jpeg';
+  const bytes = Buffer.from(await res.arrayBuffer());
+  return { bytes, contentType };
+}
+
+/**
+ * Attach an image to a catalog VARIATION via multipart POST /v2/catalog/images (Square requires
+ * the raw bytes, not a URL). Returns the new image id + its Square-hosted URL.
+ */
+export async function attachVariationImage(
+  cfg: SquareConfig,
+  opts: { variationId: string; itemName: string; bytes: Buffer; contentType?: string; fileName?: string },
+): Promise<{ imageId: string; url: string }> {
+  const base = cfg.baseUrl ?? BASE_URLS[cfg.env];
+  const doFetch = cfg.fetchImpl ?? globalThis.fetch;
+  const request = JSON.stringify({
+    idempotency_key: `${opts.variationId}-var-img`,
+    image: { type: 'IMAGE', id: '#temp_image', image_data: { name: opts.itemName || 'Product Image', caption: '' } },
+    object_id: opts.variationId,
+  });
+  const form = new FormData();
+  form.append('request', request);
+  const part = new Blob([opts.bytes as unknown as BlobPart], { type: opts.contentType ?? 'image/jpeg' });
+  form.append('image_file', part, opts.fileName ?? 'image.jpg');
+
+  // Note: no content-type header — fetch sets multipart/form-data + boundary from the FormData.
+  const res = await doFetch(`${base}/v2/catalog/images`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${cfg.token}`, accept: 'application/json', 'square-version': cfg.version ?? '2026-01-22' },
+    body: form,
+  });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : {};
+  if (!res.ok) {
+    throw new Error(`Square image ${res.status}: ${JSON.stringify(json.errors ?? json).slice(0, 300)}`);
+  }
+  return { imageId: json.image?.id ?? json.catalog_object?.id ?? '', url: json.image?.image_data?.url ?? '' };
+}
+
 /** List every catalog ITEM object (follows the cursor to the end). */
 export async function listCatalogItems(cfg: SquareConfig): Promise<any[]> {
   const items: any[] = [];
