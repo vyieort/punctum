@@ -13,6 +13,7 @@ export interface WipeResult {
   itemsFound: number;
   itemsDeleted: number;
   mappingsCleared: number;
+  invoicesCleared: number;
 }
 
 export interface WipeOps {
@@ -32,11 +33,11 @@ export function liveWipeOps(cfg: SquareConfig): WipeOps {
 export async function wipeSandboxCatalog(
   db: Queryable,
   clientId: string,
-  opts: { ops?: WipeOps } = {},
+  opts: { ops?: WipeOps; clearInvoices?: boolean } = {},
 ): Promise<WipeResult> {
   const ops = opts.ops ?? liveWipeOps(squareConfigFromEnv());
 
-  // Hard guard: never wipe a production catalog.
+  // Hard guard: never wipe a production catalog (or, below, production invoices).
   if (ops.env === 'production') {
     throw new Error('Refusing to wipe: SQUARE_ENV is production. This tool is sandbox-only.');
   }
@@ -55,5 +56,12 @@ export async function wipeSandboxCatalog(
 
   const del = await db.query(`delete from catalog_mapping where client_id = $1 returning id`, [clientId]);
 
-  return { env: ops.env, itemsFound: all.length, itemsDeleted, mappingsCleared: del.rows.length };
+  // Clear the invoice queue too for a true clean slate (sandbox-only; invoice_lines cascade).
+  let invoicesCleared = 0;
+  if (opts.clearInvoices !== false) {
+    const inv = await db.query(`delete from invoices where client_id = $1 returning id`, [clientId]);
+    invoicesCleared = inv.rows.length;
+  }
+
+  return { env: ops.env, itemsFound: all.length, itemsDeleted, mappingsCleared: del.rows.length, invoicesCleared };
 }

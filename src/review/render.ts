@@ -21,11 +21,15 @@ export function renderReviewPage(data: InvoiceForReview): string {
 
   // Backorder is empty on most invoices; only surface the column when one line has it.
   const showBackorder = lines.some((l) => l.backorder);
+  const flaggedCount = lines.filter((l) => l.flags.length > 0).length;
+  const productCount = lines.filter((l) => l.is_product).length;
   const rows = lines
-    .map(
-      (l) => `<tr>
+    .map((l) => {
+      const flagged = l.flags.length > 0;
+      const note = flagged ? `<div class="flagnote">&#9888; ${esc(l.flags.join(', '))}</div>` : '';
+      return `<tr class="${flagged ? 'flag' : ''}">
       <td>${esc(l.line_no ?? '')}</td>
-      <td>${esc(l.description)}</td>
+      <td>${esc(l.description)}${note}</td>
       <td class="num">${esc(l.quantity)}</td>
       <td class="num">${esc(l.wholesale)}</td>
       <td>${esc(l.gems)}</td>
@@ -33,8 +37,8 @@ export function renderReviewPage(data: InvoiceForReview): string {
       <td>${esc(l.synthetic_sku)}</td>
       ${showBackorder ? `<td class="ctr">${l.backorder ? 'Yes' : '&mdash;'}</td>` : ''}
       <td class="ctr">${l.is_product ? '&#10003;' : '&mdash;'}</td>
-    </tr>`,
-    )
+    </tr>`;
+    })
     .join('');
 
   const pdfPanel = invoice.has_pdf
@@ -59,6 +63,10 @@ ${status === 'importing' ? '<meta http-equiv="refresh" content="4">' : ''}
   th,td{border:1px solid #e6e6e6;padding:.4rem .55rem;text-align:left;vertical-align:top}
   th{background:#f6f6f6;font-weight:600}
   td.num{text-align:right;font-variant-numeric:tabular-nums} td.ctr{text-align:center}
+  tbody tr:nth-child(even){background:#fafafa}
+  tbody tr.flag{background:#fffbeb;box-shadow:inset 3px 0 0 #d97706}
+  .flagnote{color:#b45309;font-size:12px;margin-top:2px}
+  .flagsummary{background:#fffbeb;border:1px solid #fcd34d;color:#92400e;padding:.4rem .7rem;border-radius:6px;font-size:13px;margin:0 0 .7rem}
   .actions{margin-top:1.1rem;display:flex;gap:.6rem}
   form{display:inline}
   button{padding:.55rem 1.1rem;font:inherit;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer}
@@ -72,6 +80,7 @@ ${status === 'importing' ? '<meta http-equiv="refresh" content="4">' : ''}
     <span class="status${statusClass}">${esc(status)}</span></div>
   <div class="pdfwrap">${pdfPanel}</div>
   <div class="data">
+      ${flaggedCount ? `<div class="flagsummary">&#9888; ${flaggedCount} of ${productCount} product line${productCount === 1 ? '' : 's'} flagged to double-check &mdash; highlighted below.</div>` : ''}
       <table>
         <thead><tr><th>#</th><th>Description</th><th>Qty</th><th>Wholesale</th><th>Gems</th><th>Notes</th><th>SKU</th>${showBackorder ? '<th>Back order</th>' : ''}<th>Product?</th></tr></thead>
         <tbody>${rows}</tbody>

@@ -16,6 +16,7 @@ async function seeded(): Promise<PGlite> {
   const db = new PGlite();
   await db.exec(mig('0001_init.sql'));
   await db.exec(mig('0002_invoice_needs_review.sql'));
+  await db.exec(mig('0003_line_classification.sql'));
   await db.exec(mig('0006_status_queued.sql'));
   await db.exec(mig('0007_status_processing.sql'));
   await db.exec(mig('0008_invoice_queue_cols.sql'));
@@ -49,6 +50,31 @@ test('review shows the PDF panel (iframe) when a PDF is stored', async () => {
   const out = renderReviewPage((await getInvoiceForReview(q, INV))!);
   assert.match(out, new RegExp(`src="/invoices/${INV}/pdf`)); // iframe points at the served PDF
   assert.doesNotMatch(out, /shows here once uploaded/); // not the placeholder
+});
+
+test('flags suspicious product lines and highlights them; clean lines pass', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  await db.query(
+    `insert into invoice_lines (invoice_id, line_no, description, quantity, is_product, synthetic_sku, classification)
+     values ($1, 5, 'Clean Ring', 2, true, 'SKU-OK', '{"product_type":"RING","item_name":"18G Ring"}'::jsonb)`,
+    [INV],
+  );
+  await db.query(
+    `insert into invoice_lines (invoice_id, line_no, description, quantity, is_product, classification)
+     values ($1, 6, 'Mystery', 1, true, '{}'::jsonb)`,
+    [INV],
+  );
+  const data = (await getInvoiceForReview(q, INV))!;
+  const clean = data.lines.find((l) => l.description === 'Clean Ring')!;
+  const mystery = data.lines.find((l) => l.description === 'Mystery')!;
+  assert.deepEqual(clean.flags, []); // has SKU + classification -> clean
+  assert.ok(mystery.flags.includes('no SKU'));
+  assert.ok(mystery.flags.includes('unclassified'));
+
+  const html = renderReviewPage(data);
+  assert.match(html, /flagged to double-check/); // summary banner
+  assert.match(html, /class="flag"/); // highlighted row
 });
 
 test('approve flips status to approved', async () => {

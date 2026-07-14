@@ -320,7 +320,7 @@ const WIPE_PAGE = `<!doctype html>
 </style></head>
 <body>
   <h2>Wipe sandbox catalog</h2>
-  <p>Deletes <strong>all catalog items</strong> (with their variations + inventory) from the connected Square <strong>sandbox</strong> and clears Punctum's SKU&rarr;Square mapping. Categories are left intact; booking/appointment items are skipped.</p>
+  <p>Full clean slate for the connected Square <strong>sandbox</strong>: deletes <strong>all catalog items</strong> (with variations + inventory), clears Punctum's SKU&rarr;Square mapping, and empties the <strong>invoice queue</strong> (so <a href="/queue">/queue</a> starts fresh). Categories are left intact; booking/appointment items are skipped.</p>
   <div class="warn">Destructive and <strong>sandbox-only</strong> — it refuses to run if the connected Square account is production.</div>
   <label><input type="checkbox" id="ack"> I understand this deletes every item in the sandbox.</label>
   <button id="go" disabled onclick="run()">Wipe sandbox</button>
@@ -335,11 +335,61 @@ async function run(){
   try{
     var res=await fetch('/jobs/sandbox/wipe?client=RE',{method:'POST'});
     var j=await res.json();
-    if(res.ok){ s.textContent='Done — deleted '+j.itemsDeleted+' of '+j.itemsFound+' items, cleared '+j.mappingsCleared+' mappings ('+j.env+').'; o.textContent=JSON.stringify(j,null,2); }
+    if(res.ok){ s.textContent='Done — deleted '+j.itemsDeleted+' of '+j.itemsFound+' items, cleared '+j.mappingsCleared+' mappings, '+j.invoicesCleared+' invoices ('+j.env+').'; o.textContent=JSON.stringify(j,null,2); }
     else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }
   }catch(e){ s.textContent='Error: '+e.message; b.disabled=false; }
 }
 </script>
+</body></html>`;
+
+// Home / links index — one bookmarkable page listing every Punctum page.
+const LINKS_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Punctum</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:2.5rem auto;max-width:720px;color:#1a1a1a;padding:0 1.25rem}
+  h1{margin:0 0 .25rem} .tag{color:#666;margin:0 0 1.75rem;font-size:14px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;margin:1.6rem 0 .5rem;border-bottom:1px solid #eee;padding-bottom:.3rem}
+  h2.danger{color:#b91c1c}
+  ul{list-style:none;margin:0;padding:0}
+  li{padding:.5rem 0;border-bottom:1px solid #f3f4f6}
+  a{color:#166534;font-weight:600;text-decoration:none;font-size:15px} a:hover{text-decoration:underline}
+  .d{color:#555;font-size:13px;margin-top:2px}
+  code{background:#f3f4f6;padding:.05rem .3rem;border-radius:4px;font-size:12px}
+</style></head>
+<body>
+  <h1>Punctum</h1>
+  <p class="tag">Invoice &rarr; Square catalog automation &middot; Ritual Evolution (sandbox)</p>
+
+  <h2>Invoices</h2>
+  <ul>
+    <li><a href="/invoices/batch">Batch upload</a><div class="d">Drop a stack of PDFs &mdash; they queue and extract in the background.</div></li>
+    <li><a href="/invoices/new">Single upload</a><div class="d">Upload one invoice and go straight to its review page.</div></li>
+    <li><a href="/queue">Review queue</a><div class="d">Every invoice by status; review &amp; approve as each becomes ready.</div></li>
+  </ul>
+
+  <h2>Catalog &amp; images</h2>
+  <ul>
+    <li><a href="/catalog">Catalog review</a><div class="d">Every variation with its matched image &mdash; preview, review alternatives, set the item image.</div></li>
+    <li><a href="/jobs/images/run">Enrich images</a><div class="d">Find &amp; attach product photos to newly imported items (SerpAPI + Vision).</div></li>
+  </ul>
+
+  <h2>Setup &amp; checks</h2>
+  <ul>
+    <li><a href="/jobs/categories/provision">Provision categories</a><div class="d">Create the category tree in the Square sandbox (run once on an empty sandbox).</div></li>
+    <li><a href="/square/verify">Square connection check</a><div class="d">Confirm the Square token + location reach the sandbox.</div></li>
+    <li><a href="/compare">Compare pipelines (A/B)</a><div class="d">Diff two-pass vs one-pass extraction on a PDF &mdash; no writes.</div></li>
+  </ul>
+
+  <h2>Advanced</h2>
+  <ul>
+    <li><a href="/jobs/import/run">Manual import / retry</a><div class="d">Re-push an approved invoice to Square &mdash; needs <code>?invoice=&lt;id&gt;</code>.</div></li>
+  </ul>
+
+  <h2 class="danger">Danger zone</h2>
+  <ul>
+    <li><a href="/jobs/sandbox/wipe">Wipe sandbox</a><div class="d">Full clean slate: delete all catalog items + clear the invoice queue (sandbox-only).</div></li>
+  </ul>
 </body></html>`;
 
 const server = createServer(async (req, res) => {
@@ -375,19 +425,9 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  if (url.pathname === '/') {
-    sendJson(res, 200, {
-      service: 'punctum',
-      version: process.env.npm_package_version ?? 'dev',
-      endpoints: {
-        'GET /health': 'liveness probe',
-        'GET /tags':
-          '/tags?vendor=BVLA&item=20g Seam Ring&variation=RG14K&variation=WG14K&variation=YG14K',
-        'POST /jobs/tags/run': '/jobs/tags/run?client=RE — tags PENDING catalog_mapping rows',
-        'GET /invoices/new': 'upload a vendor invoice PDF -> extract -> review',
-        'GET /invoices/:id/review': 'read-only review + approve/reject',
-      },
-    });
+  if (url.pathname === '/' && req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(LINKS_PAGE);
     return;
   }
 

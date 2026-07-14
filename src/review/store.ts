@@ -27,6 +27,35 @@ export interface InvoiceLineRow {
   synthetic_sku: string | null;
   is_product: boolean;
   review_status: string | null;
+  flags: string[]; // deterministic "double-check this" signals; empty = looks fine
+}
+
+const asObj = (v: unknown): Record<string, unknown> => {
+  if (v && typeof v === 'object') return v as Record<string, unknown>;
+  if (typeof v === 'string') {
+    try {
+      return JSON.parse(v) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  return {};
+};
+
+/** Concrete signals that a parsed product line is likely wrong — surfaced on the review page. */
+export function computeLineFlags(row: Record<string, unknown>): string[] {
+  if (!row.is_product) return []; // shipping/fees aren't catalog errors
+  const c = asObj(row.classification);
+  const flags: string[] = [];
+  if (!String(row.synthetic_sku ?? '').trim()) flags.push('no SKU');
+  if (!String(c.item_name ?? '').trim()) flags.push('no item name');
+  const pt = String(c.product_type ?? '').toUpperCase();
+  if (pt === '' || pt === 'FALLBACK') flags.push('unclassified');
+  const fr = String(c.flag_reason ?? '').trim();
+  if (fr) flags.push(fr);
+  const qty = parseFloat(String(row.quantity ?? ''));
+  if (!Number.isFinite(qty) || qty <= 0) flags.push('bad qty');
+  return flags;
 }
 
 export interface InvoiceForReview {
@@ -54,13 +83,26 @@ export async function getInvoiceForReview(
   if (inv.rows.length === 0) return null;
   const lines = await db.query(
     `select id, line_no, description, quantity::text as quantity, wholesale::text as wholesale,
-            gems, notes, backorder, synthetic_sku, is_product, review_status
+            gems, notes, backorder, synthetic_sku, is_product, review_status, classification
        from invoice_lines where invoice_id = $1 order by line_no nulls last, created_at`,
     [invoiceId],
   );
   return {
     invoice: inv.rows[0] as unknown as InvoiceRow,
-    lines: (lines.rows as unknown as InvoiceLineRow[]).map((l) => ({ ...l, quantity: trimZeros(l.quantity) })),
+    lines: (lines.rows as Array<Record<string, unknown>>).map((row) => ({
+      id: String(row.id),
+      line_no: (row.line_no as number | null) ?? null,
+      description: (row.description as string | null) ?? null,
+      quantity: trimZeros(row.quantity),
+      wholesale: (row.wholesale as string | null) ?? null,
+      gems: (row.gems as string | null) ?? null,
+      notes: (row.notes as string | null) ?? null,
+      backorder: Boolean(row.backorder),
+      synthetic_sku: (row.synthetic_sku as string | null) ?? null,
+      is_product: Boolean(row.is_product),
+      review_status: (row.review_status as string | null) ?? null,
+      flags: computeLineFlags(row),
+    })),
   };
 }
 
