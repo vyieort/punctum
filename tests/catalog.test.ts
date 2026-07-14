@@ -38,17 +38,18 @@ test('getCatalogRows strips the tag suffix and returns the image url', async () 
   assert.equal(rows[0]!.imageUrl, 'https://p/1.jpg');
 });
 
-test('renderCatalogPage shows a thumbnail + Reject only for imaged rows', async () => {
+test('renderCatalogPage gives imaged rows a Show + Reject; no-image rows get neither', async () => {
   const db = await seeded();
   await addRow(db, { sku: 'S1', vid: 'V1', status: 'ENRICHED', imageUrl: 'https://p/1.jpg', imageId: 'IMG1' });
   await addRow(db, { sku: 'S2', vid: 'V2', status: 'NO_IMAGE' });
   const html = renderCatalogPage(await getCatalogRows(db as unknown as Queryable, 'RE'));
-  assert.match(html, /<img src="https:\/\/p\/1\.jpg"/);
-  assert.match(html, /rej\(this,'/); // a reject button exists
+  assert.match(html, /id="preview"/); // sticky 500x500 preview pane
+  assert.match(html, /data-url="https:\/\/p\/1\.jpg"/); // Show button carries the image url
+  assert.match(html, /class="rej" data-seq="/); // reject button
   assert.match(html, /1 ENRICHED/);
   assert.match(html, /1 NO_IMAGE/);
-  // the no-image row shows the placeholder, not a second image
-  assert.equal((html.match(/<img /g) ?? []).length, 1);
+  // only the one imaged row gets a Show button
+  assert.equal((html.match(/class="show"/g) ?? []).length, 1);
 });
 
 test('rejectImage deletes the Square image, re-queues PENDING, records the rejected url', async () => {

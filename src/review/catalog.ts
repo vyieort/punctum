@@ -1,7 +1,8 @@
-// Catalog review page: the enriched catalog_mapping rows rendered with the matched image
-// inline (thumbnail + URL), so image matches can be eyeballed without digging through Square.
-// Each imaged row has a Reject button — it deletes the wrong image from Square and re-queues
-// the variation (excluding the rejected URL) so the next enrich run finds a different one.
+// Catalog review page: a sticky ~500px image preview pinned on top, and a scrolling list of
+// every catalog_mapping variation beneath it. Each imaged row has a "Show" button that loads
+// its match into the top preview (the URL is also on the right, click to open full size), and
+// a "Reject" button that deletes the wrong image from Square and re-queues the variation
+// (excluding the rejected URL) so the next enrich run finds a different one.
 
 import type { Queryable } from '../jobs/pg-rows.js';
 import { squareConfigFromEnv, deleteCatalogObject, type SquareConfig } from '../lib/square-client.js';
@@ -72,18 +73,17 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
   const body = rows
     .map((r) => {
       const color = STATUS_COLOR[r.status] ?? '#6b7280';
-      const thumb = r.imageUrl
-        ? `<a href="${esc(r.imageUrl)}" target="_blank" rel="noreferrer"><img src="${esc(r.imageUrl)}" loading="lazy" alt=""></a>`
-        : '<div class="noimg">—</div>';
+      const caption = `${r.itemName}${r.variationName ? ' — ' + r.variationName : ''}`;
+      const showBtn = r.imageUrl
+        ? `<button class="show" data-url="${esc(r.imageUrl)}" data-cap="${esc(caption)}">Show</button>`
+        : '';
       const urlCell = r.imageUrl
         ? `<a href="${esc(r.imageUrl)}" target="_blank" rel="noreferrer" class="url">${esc(r.imageUrl)}</a>`
         : '';
       const price = r.retailPrice ? `$${esc(r.retailPrice)}` : '';
-      const reject = r.imageUrl
-        ? `<button class="rej" onclick="rej(this,'${esc(r.seq)}')">Reject</button>`
-        : '';
+      const reject = r.imageUrl ? `<button class="rej" data-seq="${esc(r.seq)}">Reject</button>` : '';
       return `<tr>
-        <td class="imgcell">${thumb}</td>
+        <td class="showcell">${showBtn}</td>
         <td><div class="item">${esc(r.itemName)}</div>${r.tags ? `<div class="tags">${esc(r.tags)}</div>` : ''}</td>
         <td>${esc(r.variationName)}</td>
         <td>${esc(r.vendor)}</td>
@@ -100,41 +100,64 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Catalog review</title>
 <style>
-  body{font-family:system-ui,-apple-system,sans-serif;margin:1.5rem auto;max-width:1280px;color:#1a1a1a;padding:0 1rem}
-  h2{margin:0 0 .25rem} .sub{color:#555;margin:0 0 1rem;font-size:14px}
+  body{font-family:system-ui,-apple-system,sans-serif;margin:0 auto;max-width:1280px;color:#1a1a1a;padding:1.25rem 1rem}
+  h2{margin:0 0 .25rem} .sub{color:#555;margin:0 0 .75rem;font-size:14px}
+  #preview{position:sticky;top:0;background:#fff;border-bottom:2px solid #eee;padding:.5rem 0 .9rem;z-index:5;
+    display:flex;flex-direction:column;align-items:center}
+  #pv{width:500px;height:500px;max-width:100%;object-fit:contain;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px}
+  #pvempty{width:500px;max-width:100%;height:180px;display:flex;align-items:center;justify-content:center;
+    color:#9ca3af;border:1px dashed #d1d5db;border-radius:8px;font-size:14px}
+  .pvmeta{margin-top:.5rem;font-size:13px;color:#374151;text-align:center}
+  .pvmeta a{color:#2563eb;margin-left:.5rem}
   table{border-collapse:collapse;width:100%;font-size:13px}
   th,td{border-bottom:1px solid #eee;padding:.5rem .6rem;text-align:left;vertical-align:top}
-  th{color:#666;font-weight:600;position:sticky;top:0;background:#fff;z-index:1}
-  .imgcell{width:76px} img{width:64px;height:64px;object-fit:cover;border-radius:6px;background:#f3f4f6;border:1px solid #e5e7eb}
-  .noimg{width:64px;height:64px;border-radius:6px;background:#f9fafb;border:1px dashed #d1d5db;display:flex;align-items:center;justify-content:center;color:#9ca3af}
+  th{color:#666;font-weight:600}
+  .showcell{width:64px}
+  .show{font:inherit;font-size:12px;padding:.25rem .6rem;border:1px solid #166534;color:#166534;background:#fff;border-radius:6px;cursor:pointer}
   .item{font-weight:600} .tags{color:#6b7280;font-size:11px;margin-top:2px}
   .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#374151}
   .badge{color:#fff;border-radius:999px;padding:.1rem .5rem;font-size:11px;font-weight:600;white-space:nowrap}
   .url{color:#2563eb;font-size:11px;word-break:break-all;display:inline-block;max-width:280px} .url-td{max-width:300px}
   .rej{font:inherit;font-size:12px;padding:.25rem .6rem;border:1px solid #b91c1c;color:#b91c1c;background:#fff;border-radius:6px;cursor:pointer}
-  .rej:disabled{opacity:.6;cursor:default}
+  .rej:disabled,.show:disabled{opacity:.6;cursor:default}
+  tr.active{background:#f0fdf4} tr.active .show{background:#166534;color:#fff}
   tr.rejected{opacity:.45}
 </style></head>
 <body>
   <h2>Catalog review</h2>
-  <p class="sub">${rows.length} variations${countLine ? ' — ' + esc(countLine) : ''}. Thumbnails are the matched image; click to open full size. Reject removes a wrong image and re-queues it for a new match.</p>
+  <p class="sub">${rows.length} variations${countLine ? ' — ' + esc(countLine) : ''}. Click <strong>Show</strong> to preview an image up top; <strong>Reject</strong> removes a wrong image and re-queues it for a new match.</p>
+  <div id="preview">
+    <img id="pv" alt="" style="display:none">
+    <div id="pvempty">Click “Show” on any row to preview its image here (500×500).</div>
+    <div class="pvmeta"><span id="pvcap"></span><a id="pvlink" href="#" target="_blank" rel="noreferrer" style="display:none">open full size ↗</a></div>
+  </div>
   <table>
-    <thead><tr><th>Image</th><th>Item</th><th>Variation</th><th>Vendor</th><th>SKU</th><th>Price</th><th>Status</th><th>Image URL</th><th></th></tr></thead>
+    <thead><tr><th></th><th>Item</th><th>Variation</th><th>Vendor</th><th>SKU</th><th>Price</th><th>Status</th><th>Image URL</th><th></th></tr></thead>
     <tbody>${body}</tbody>
   </table>
 <script>
-async function rej(btn, seq){
-  if(!confirm('Remove this image and re-queue this variation for a new match?')) return;
-  btn.disabled=true; btn.textContent='…';
-  try{
-    var res=await fetch('/catalog/reject?client=RE&seq='+encodeURIComponent(seq),{method:'POST'});
-    if(res.ok){
-      var tr=btn.closest('tr'); tr.classList.add('rejected');
-      var img=tr.querySelector('img'); if(img) img.remove();
-      btn.textContent='Rejected';
-    } else { btn.disabled=false; btn.textContent='Reject'; alert('Error '+res.status); }
-  }catch(e){ btn.disabled=false; btn.textContent='Reject'; alert(e.message); }
+function show(url, cap, tr){
+  var pv=document.getElementById('pv'), e=document.getElementById('pvempty');
+  pv.src=url; pv.style.display='block'; e.style.display='none';
+  document.getElementById('pvcap').textContent=cap||'';
+  var l=document.getElementById('pvlink'); l.href=url; l.style.display='inline';
+  document.querySelectorAll('tr.active').forEach(function(t){t.classList.remove('active');});
+  if(tr) tr.classList.add('active');
 }
+document.querySelectorAll('.show').forEach(function(b){
+  b.addEventListener('click', function(){ show(b.getAttribute('data-url'), b.getAttribute('data-cap'), b.closest('tr')); });
+});
+document.querySelectorAll('.rej').forEach(function(b){
+  b.addEventListener('click', async function(){
+    if(!confirm('Remove this image and re-queue this variation for a new match?')) return;
+    b.disabled=true; b.textContent='…';
+    try{
+      var res=await fetch('/catalog/reject?client=RE&seq='+encodeURIComponent(b.getAttribute('data-seq')),{method:'POST'});
+      if(res.ok){ b.closest('tr').classList.add('rejected'); b.textContent='Rejected'; }
+      else { b.disabled=false; b.textContent='Reject'; alert('Error '+res.status); }
+    }catch(e){ b.disabled=false; b.textContent='Reject'; alert(e.message); }
+  });
+});
 </script>
 </body></html>`;
 }
