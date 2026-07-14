@@ -10,6 +10,7 @@ import {
   deleteCatalogObject,
   downloadImage,
   attachVariationImage,
+  setItemImage,
   isAllowedImageType,
   type SquareConfig,
 } from '../lib/square-client.js';
@@ -89,6 +90,9 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
       const thumb = r.imageUrl
         ? `<img class="thumb" src="${esc(r.imageUrl)}" data-url="${esc(r.imageUrl)}" data-cap="${esc(caption)}" loading="lazy" alt="" title="Click to enlarge">`
         : '<span class="nothumb">—</span>';
+      const useItem = r.imageUrl
+        ? `<button class="useitem" data-seq="${esc(r.seq)}" title="Use this image as the item's grid image">&#9733; item</button>`
+        : '';
       const urlCell = r.imageUrl
         ? `<a href="${esc(r.imageUrl)}" target="_blank" rel="noreferrer" class="url">${esc(r.imageUrl)}</a>`
         : '';
@@ -98,7 +102,7 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
         ? `<button class="alts" data-seq="${esc(r.seq)}" data-cap="${esc(caption)}">Review alternatives</button>`
         : '';
       return `<tr id="row-${esc(r.seq)}">
-        <td class="showcell">${thumb}</td>
+        <td class="showcell">${thumb}${useItem}</td>
         <td><div class="item">${esc(r.itemName)}</div>${r.tags ? `<div class="tags">${esc(r.tags)}</div>` : ''}</td>
         <td>${esc(r.variationName)}</td>
         <td>${esc(r.vendor)}</td>
@@ -134,9 +138,11 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
   table{border-collapse:collapse;width:100%;font-size:13px}
   th,td{border-bottom:1px solid #eee;padding:.5rem .6rem;text-align:left;vertical-align:top}
   th{color:#666;font-weight:600}
-  .showcell{width:58px}
+  .showcell{width:66px}
   .thumb{width:50px;height:50px;object-fit:cover;border-radius:5px;border:1px solid #e5e7eb;background:#f3f4f6;cursor:pointer;display:block}
   .nothumb{color:#9ca3af}
+  .useitem{margin-top:3px;font:inherit;font-size:10px;padding:.12rem .2rem;border:1px solid #7c3aed;color:#7c3aed;background:#fff;border-radius:4px;cursor:pointer;display:block;width:100%;white-space:nowrap}
+  .useitem:disabled{opacity:.6}
   .item{font-weight:600} .tags{color:#6b7280;font-size:11px;margin-top:2px}
   .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#374151}
   .badge{color:#fff;border-radius:999px;padding:.1rem .5rem;font-size:11px;font-weight:600;white-space:nowrap}
@@ -171,6 +177,15 @@ function showSingle(url, cap, tr){
 }
 document.querySelectorAll('.thumb').forEach(function(b){
   b.addEventListener('click', function(){ showSingle(b.getAttribute('data-url'), b.getAttribute('data-cap'), b.closest('tr')); });
+});
+document.querySelectorAll('.useitem').forEach(function(b){
+  b.addEventListener('click', async function(){
+    var t=b.textContent; b.disabled=true; b.textContent='…';
+    try{
+      var r=await fetch('/catalog/set-item-image?client=RE&seq='+encodeURIComponent(b.getAttribute('data-seq')),{method:'POST'});
+      if(r.ok){ b.textContent='✓ item'; } else { b.disabled=false; b.textContent=t; alert('Error '+r.status); }
+    }catch(e){ b.disabled=false; b.textContent=t; alert(e.message); }
+  });
 });
 document.querySelectorAll('.alts').forEach(function(b){
   b.addEventListener('click', async function(){
@@ -232,6 +247,7 @@ export interface ImageEditOps {
   deleteImage(imageId: string): Promise<void>;
   download(url: string): Promise<{ bytes: Buffer; contentType: string }>;
   attach(opts: { variationId: string; itemName: string; bytes: Buffer; contentType?: string; sourceUrl?: string }): Promise<{ imageId: string; url: string }>;
+  setItemImage(itemId: string, imageId: string): Promise<void>;
 }
 
 /** Download the first URL that is a Square-allowed image type (full-size, then thumbnail). */
@@ -256,7 +272,27 @@ export function liveImageEditOps(cfg: SquareConfig): ImageEditOps {
     deleteImage: (id) => deleteCatalogObject(cfg, id),
     download: (url) => downloadImage(url),
     attach: (o) => attachVariationImage(cfg, o),
+    setItemImage: (itemId, imageId) => setItemImage(cfg, itemId, imageId),
   };
+}
+
+/** Promote a variation's image to its item's primary (grid) image — a reviewer override. */
+export async function setItemImageFromRow(
+  db: Queryable,
+  clientId: string,
+  seq: string,
+  opts: { ops?: ImageEditOps } = {},
+): Promise<{ ok: boolean }> {
+  const ops = opts.ops ?? liveImageEditOps(squareConfigFromEnv());
+  const { rows } = await db.query(
+    `select square_item_id, square_image_id from catalog_mapping where client_id = $1 and seq = $2`,
+    [clientId, seq],
+  );
+  if (rows.length === 0) return { ok: false };
+  const row = rows[0] as { square_item_id: string | null; square_image_id: string | null };
+  if (!row.square_item_id || !row.square_image_id) return { ok: false };
+  await ops.setItemImage(row.square_item_id, row.square_image_id);
+  return { ok: true };
 }
 
 export interface Candidate {

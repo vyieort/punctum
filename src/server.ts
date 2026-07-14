@@ -23,7 +23,7 @@ import { runComparison } from './jobs/compare.js';
 import { runImport } from './jobs/import.js';
 import { wipeSandboxCatalog } from './jobs/wipe.js';
 import { enrichImages } from './jobs/enrich-images.js';
-import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, clearVariationImage } from './review/catalog.js';
+import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, clearVariationImage, setItemImageFromRow } from './review/catalog.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -476,6 +476,23 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+  // Promote a variation's image to its item's primary (grid) image.
+  if (url.pathname === '/catalog/set-item-image' && req.method === 'POST') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    const seq = url.searchParams.get('seq');
+    if (!seq) {
+      sendJson(res, 400, { error: "missing required query param: 'seq'" });
+      return;
+    }
+    try {
+      const result = await setItemImageFromRow(getPool() as unknown as Queryable, client, seq);
+      sendJson(res, result.ok ? 200 : 404, result);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
   // Clear a variation's image (none of the candidates fit).
   if (url.pathname === '/catalog/clear-image' && req.method === 'POST') {
     const client = url.searchParams.get('client') ?? 'RE';
@@ -675,6 +692,31 @@ const server = createServer(async (req, res) => {
   const parts = url.pathname.split('/').filter(Boolean);
   if (parts[0] === 'invoices' && parts.length === 3) {
     const [, invoiceId, action] = parts;
+
+    // Serve the stored source PDF for the review panel.
+    if (action === 'pdf' && req.method === 'GET') {
+      try {
+        const pool = getPool() as unknown as Queryable;
+        const q = await pool.query(`select encode(pdf_bytes, 'base64') as pdf_b64 from invoices where id = $1`, [invoiceId]);
+        const b64 = (q.rows[0] as { pdf_b64: string | null } | undefined)?.pdf_b64;
+        if (!b64) {
+          sendJson(res, 404, { error: 'no pdf for this invoice' });
+          return;
+        }
+        const bytes = Buffer.from(b64.replace(/\s+/g, ''), 'base64');
+        res.writeHead(200, {
+          'content-type': 'application/pdf',
+          'content-length': String(bytes.length),
+          'content-disposition': 'inline',
+          'cache-control': 'private, max-age=300',
+        });
+        res.end(bytes);
+      } catch (err) {
+        sendJson(res, 500, { error: (err as Error).message });
+      }
+      return;
+    }
+
     try {
       const pool = getPool() as unknown as Queryable;
       const result = await handleReview(

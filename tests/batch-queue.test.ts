@@ -53,7 +53,7 @@ test('queueInvoice stores a queued invoice holding the pdf bytes', async () => {
   assert.equal(row.has_pdf, true);
 });
 
-test('processQueuedInvoice extracts, writes lines, clears bytes -> in_review', async () => {
+test('processQueuedInvoice extracts, writes lines, keeps the PDF -> in_review', async () => {
   const db = await seeded();
   const { invoiceId } = await queueInvoice(db as unknown as Queryable, 'RE', { pdfBase64: PDF_B64 });
   const r = await processQueuedInvoice(db as unknown as Queryable, invoiceId, fakeExtract());
@@ -67,7 +67,7 @@ test('processQueuedInvoice extracts, writes lines, clears bytes -> in_review', a
   ).rows[0]!;
   assert.equal(inv.status, 'in_review');
   assert.equal(inv.vendor, 'BVLA');
-  assert.equal(inv.has_pdf, false); // cleared after success
+  assert.equal(inv.has_pdf, true); // kept for the review panel
   const lines = await db.query<{ n: number }>(`select count(*)::int as n from invoice_lines where invoice_id=$1`, [invoiceId]);
   assert.equal(lines.rows[0]!.n, 1);
 });

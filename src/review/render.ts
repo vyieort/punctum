@@ -37,8 +37,8 @@ export function renderReviewPage(data: InvoiceForReview): string {
     )
     .join('');
 
-  const pdfPanel = invoice.pdf_storage_path
-    ? `<iframe class="pdf" src="/invoices/${esc(invoice.id)}/pdf" title="Source invoice"></iframe>`
+  const pdfPanel = invoice.has_pdf
+    ? `<iframe class="pdf" src="/invoices/${esc(invoice.id)}/pdf#view=FitH" title="Source invoice"></iframe>`
     : `<div class="pdf placeholder">Source invoice PDF shows here once uploaded via intake.</div>`;
 
   return `<!doctype html>
@@ -51,10 +51,10 @@ ${status === 'importing' ? '<meta http-equiv="refresh" content="4">' : ''}
   .status{display:inline-block;padding:.1rem .5rem;border-radius:4px;background:#eee;font-size:13px}
   .status.approved{background:#d6f5d6;color:#166534}
   .status.rejected{background:#fde2e1;color:#9f1d1a}
-  .cols{display:flex;gap:1.25rem;align-items:flex-start;flex-wrap:wrap}
-  .panel{flex:1 1 460px;min-width:0}
-  .pdf{width:100%;height:72vh;border:1px solid #ddd;border-radius:6px}
-  .pdf.placeholder{display:flex;align-items:center;justify-content:center;text-align:center;color:#888;background:#fafafa;padding:1rem;min-height:200px}
+  .pdfwrap{position:sticky;top:0;background:#fff;z-index:5;padding:.3rem 0 .7rem;border-bottom:2px solid #eee}
+  .pdf{width:100%;height:50vh;border:1px solid #ddd;border-radius:6px;display:block}
+  .pdf.placeholder{display:flex;align-items:center;justify-content:center;text-align:center;color:#888;background:#fafafa;padding:1rem;height:180px}
+  .data{padding-top:1rem}
   table{border-collapse:collapse;width:100%;font-size:14px}
   th,td{border:1px solid #e6e6e6;padding:.4rem .55rem;text-align:left;vertical-align:top}
   th{background:#f6f6f6;font-weight:600}
@@ -70,9 +70,8 @@ ${status === 'importing' ? '<meta http-equiv="refresh" content="4">' : ''}
   <h2>${esc(invoice.vendor)} &mdash; ${esc(invoice.invoice_number)}</h2>
   <div class="meta">${esc(invoice.invoice_date)} &middot; Total $${esc(invoice.total)} &middot;
     <span class="status${statusClass}">${esc(status)}</span></div>
-  <div class="cols">
-    <div class="panel">${pdfPanel}</div>
-    <div class="panel">
+  <div class="pdfwrap">${pdfPanel}</div>
+  <div class="data">
       <table>
         <thead><tr><th>#</th><th>Description</th><th>Qty</th><th>Wholesale</th><th>Gems</th><th>Notes</th><th>SKU</th>${showBackorder ? '<th>Back order</th>' : ''}<th>Product?</th></tr></thead>
         <tbody>${rows}</tbody>
@@ -97,7 +96,6 @@ ${status === 'importing' ? '<meta http-equiv="refresh" content="4">' : ''}
           : ''
       }
       ${status === 'needs_review' ? '<p>&#8617; Sent back for re-parse.</p>' : ''}
-    </div>
   </div>
 <script>
   // Guard against a double-click firing two approves (the push takes a few seconds to return).

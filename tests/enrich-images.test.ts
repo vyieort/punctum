@@ -30,6 +30,7 @@ async function addRow(db: PGlite, sku: string, vid: string): Promise<void> {
 
 interface FakeCfg {
   existingImages?: string[];
+  itemImages?: string[]; // existing item-level image ids (empty -> auto-set item image)
   candidates?: ImageCandidate[];
   vision?: VisionResult;
   throwOnSearch?: boolean;
@@ -37,9 +38,13 @@ interface FakeCfg {
 }
 
 function fakeOps(cfg: FakeCfg = {}) {
-  const calls = { search: 0, score: 0, download: 0, attach: 0 };
+  const calls = { search: 0, score: 0, download: 0, attach: 0, itemImageSet: [] as string[] };
   const ops: EnrichOps = {
     variationImageIds: async () => cfg.existingImages ?? [],
+    itemImageIds: async () => cfg.itemImages ?? [],
+    setItemImage: async (itemId, imageId) => {
+      calls.itemImageSet.push(itemId + ':' + imageId);
+    },
     search: async () => {
       calls.search++;
       if (cfg.throwOnSearch) throw new Error('serp down');
@@ -106,6 +111,23 @@ test('neither url is a valid image -> NO_IMAGE, no attach, but candidates kept',
     await db.query<{ image_candidates: string | null }>(`select image_candidates from catalog_mapping where vendor_sku='S1'`)
   ).rows[0]!;
   assert.match(cand.image_candidates ?? '', /pushUrl/); // still available for manual review
+});
+
+test('first enriched variation also becomes the item image (item had none)', async () => {
+  const db = await seeded();
+  await addRow(db, 'S1', 'V1');
+  const { ops, calls } = fakeOps({ itemImages: [] }); // item has no image yet
+  await enrichImages(db as unknown as Queryable, 'RE', { ops });
+  assert.equal(calls.itemImageSet.length, 1);
+  assert.match(calls.itemImageSet[0]!, /^ITEM1:/); // ITEM1's grid image gets set
+});
+
+test('does not overwrite an item image that already exists', async () => {
+  const db = await seeded();
+  await addRow(db, 'S1', 'V1');
+  const { ops, calls } = fakeOps({ itemImages: ['EXISTING_ITEM_IMG'] }); // item already imaged
+  await enrichImages(db as unknown as Queryable, 'RE', { ops });
+  assert.equal(calls.itemImageSet.length, 0);
 });
 
 test('weak match: sets NO_IMAGE and never attaches', async () => {

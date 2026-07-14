@@ -106,6 +106,28 @@ export async function getVariationImageIds(cfg: SquareConfig, variationId: strin
   return j.object?.item_variation_data?.image_ids ?? [];
 }
 
+/** Existing image ids on an item (its grid/primary image). */
+export async function getItemImageIds(cfg: SquareConfig, itemId: string): Promise<string[]> {
+  const j = await squareRequest(cfg, `/v2/catalog/object/${itemId}`, { method: 'GET' });
+  return j.object?.item_data?.image_ids ?? [];
+}
+
+/**
+ * Point an item's primary (grid) image at an existing IMAGE object — reuses the variation's
+ * image, no re-upload. Read-modify-write of the full item so variations are preserved.
+ */
+export async function setItemImage(cfg: SquareConfig, itemId: string, imageId: string): Promise<void> {
+  const got = await squareRequest(cfg, `/v2/catalog/object/${itemId}`, { method: 'GET' });
+  const obj = got.object;
+  if (!obj) throw new Error(`item ${itemId} not found`);
+  obj.item_data = obj.item_data ?? {};
+  obj.item_data.image_ids = [imageId];
+  await squareRequest(cfg, '/v2/catalog/object', {
+    method: 'POST',
+    body: { idempotency_key: `${itemId}-itemimg-${Date.now()}`, object: obj },
+  });
+}
+
 /** Content types Square accepts for a catalog image. */
 const ALLOWED_IMAGE_TYPE = /^image\/(jpeg|pjpeg|png|x-png|gif)/i;
 export function isAllowedImageType(contentType: string): boolean {

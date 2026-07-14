@@ -12,6 +12,7 @@ export interface InvoiceRow {
   total: string | null;
   status: string;
   pdf_storage_path: string | null;
+  has_pdf: boolean;
 }
 
 export interface InvoiceLineRow {
@@ -46,7 +47,7 @@ export async function getInvoiceForReview(
 ): Promise<InvoiceForReview | null> {
   const inv = await db.query(
     `select id, client_id, vendor, invoice_number, invoice_date::text as invoice_date,
-            total::text as total, status, pdf_storage_path
+            total::text as total, status, pdf_storage_path, pdf_bytes is not null as has_pdf
        from invoices where id = $1`,
     [invoiceId],
   );

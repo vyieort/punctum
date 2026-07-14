@@ -17,6 +17,7 @@ async function seeded(): Promise<PGlite> {
   await db.exec(mig('0001_init.sql'));
   await db.exec(mig('0002_invoice_needs_review.sql'));
   await db.exec(mig('0003_line_classification.sql'));
+  await db.exec(mig('0008_invoice_queue_cols.sql'));
   await db.exec(`insert into clients (id,name) values ('RE','Ritual Evolution')`);
   return db;
 }

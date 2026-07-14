@@ -86,8 +86,8 @@ export async function ingestInvoice(
   const merged = await extract(pdfForAi);
 
   const inv = await db.query(
-    `insert into invoices (client_id, vendor, invoice_number, invoice_date, total, status, pdf_storage_path)
-     values ($1, $2, $3, $4, $5, 'in_review', $6)
+    `insert into invoices (client_id, vendor, invoice_number, invoice_date, total, status, pdf_storage_path, pdf_bytes)
+     values ($1, $2, $3, $4, $5, 'in_review', $6, decode($7, 'base64'))
      returning id`,
     [
       clientId,
@@ -96,6 +96,7 @@ export async function ingestInvoice(
       merged.invoice_date || null,
       merged.invoice_total ?? null,
       input.pdfStoragePath ?? null,
+      pdfForAi, // keep the compressed PDF for the review panel
     ],
   );
   const invoiceId = (inv.rows[0] as { id: string }).id;
@@ -157,7 +158,7 @@ export async function processQueuedInvoice(
     const merged = await extract(cleanB64); // the stored PDF is already compressed
     await db.query(
       `update invoices set vendor = $2, invoice_number = $3, invoice_date = $4, total = $5,
-              status = 'in_review', pdf_bytes = null, updated_at = now()
+              status = 'in_review', updated_at = now()
          where id = $1`,
       [invoiceId, merged.vendor_name || null, merged.invoice_number || null, merged.invoice_date || null, merged.invoice_total ?? null],
     );

@@ -16,6 +16,9 @@ async function seeded(): Promise<PGlite> {
   const db = new PGlite();
   await db.exec(mig('0001_init.sql'));
   await db.exec(mig('0002_invoice_needs_review.sql'));
+  await db.exec(mig('0006_status_queued.sql'));
+  await db.exec(mig('0007_status_processing.sql'));
+  await db.exec(mig('0008_invoice_queue_cols.sql'));
   await db.exec(`insert into clients (id,name) values ('RE','Ritual Evolution')`);
   await db.exec(`insert into invoices (id, client_id, vendor, invoice_number, invoice_date, total, status)
     values ('${INV}','RE','BVLA','INV-DEMO-001','2026-07-11',412.50,'in_review')`);
@@ -34,6 +37,18 @@ test('review page is fully read-only (no inputs) and shows the parsed lines', as
   assert.doesNotMatch(out, /<input/); // read-only — no editable fields
   assert.match(out, /\/approve/);
   assert.match(out, /\/reject/);
+});
+
+test('review shows the PDF panel (iframe) when a PDF is stored', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  await db.query(`update invoices set pdf_bytes = decode($1,'base64') where id = $2`, [
+    Buffer.from('%PDF-1.4 x').toString('base64'),
+    INV,
+  ]);
+  const out = renderReviewPage((await getInvoiceForReview(q, INV))!);
+  assert.match(out, new RegExp(`src="/invoices/${INV}/pdf`)); // iframe points at the served PDF
+  assert.doesNotMatch(out, /shows here once uploaded/); // not the placeholder
 });
 
 test('approve flips status to approved', async () => {

@@ -11,6 +11,7 @@ import {
   getCandidates,
   setVariationImage,
   clearVariationImage,
+  setItemImageFromRow,
   type ImageEditOps,
 } from '../src/review/catalog.js';
 
@@ -38,7 +39,7 @@ async function addRow(
 }
 
 function fakeEditOps() {
-  const calls = { deleted: [] as string[], downloaded: [] as string[], attached: 0 };
+  const calls = { deleted: [] as string[], downloaded: [] as string[], attached: 0, itemImageSet: [] as string[] };
   const ops: ImageEditOps = {
     deleteImage: async (id) => void calls.deleted.push(id),
     download: async (url) => {
@@ -49,6 +50,7 @@ function fakeEditOps() {
       calls.attached++;
       return { imageId: 'IMG_NEW', url: 'https://sq/new.jpg' };
     },
+    setItemImage: async (itemId, imageId) => void calls.itemImageSet.push(itemId + ':' + imageId),
   };
   return { ops, calls };
 }
@@ -120,6 +122,24 @@ test('clearVariationImage removes the image and marks NO_IMAGE', async () => {
   assert.equal(row.status, 'NO_IMAGE');
   assert.equal(row.image_url, null);
   assert.equal(row.square_image_id, null);
+});
+
+test('setItemImageFromRow promotes the variation image to the item primary', async () => {
+  const db = await seeded();
+  const seq = await addRow(db, { sku: 'S1', vid: 'V1', status: 'ENRICHED', imageUrl: 'https://p/1.jpg', imageId: 'IMG1', candidates: CANDS });
+  const { ops, calls } = fakeEditOps();
+  const r = await setItemImageFromRow(db as unknown as Queryable, 'RE', seq, { ops });
+  assert.equal(r.ok, true);
+  assert.deepEqual(calls.itemImageSet, ['ITEM1:IMG1']); // item ITEM1 gets the variation's image
+});
+
+test('setItemImageFromRow is a no-op when the row has no stored image', async () => {
+  const db = await seeded();
+  const seq = await addRow(db, { sku: 'S2', vid: 'V2', status: 'NO_IMAGE' }); // no square_image_id
+  const { ops, calls } = fakeEditOps();
+  const r = await setItemImageFromRow(db as unknown as Queryable, 'RE', seq, { ops });
+  assert.equal(r.ok, false);
+  assert.equal(calls.itemImageSet.length, 0);
 });
 
 test('setVariationImage on an unknown row is a no-op', async () => {

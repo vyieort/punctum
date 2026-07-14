@@ -10,6 +10,8 @@ import type { Queryable } from './pg-rows.js';
 import {
   squareConfigFromEnv,
   getVariationImageIds,
+  getItemImageIds,
+  setItemImage,
   downloadImage,
   attachVariationImage,
   isAllowedImageType,
@@ -23,8 +25,10 @@ export interface EnrichOps {
   search(query: string): Promise<ImageCandidate[]>;
   score(productInfo: string, candidates: ImageCandidate[]): Promise<VisionResult>;
   variationImageIds(variationId: string): Promise<string[]>;
+  itemImageIds(itemId: string): Promise<string[]>;
   download(url: string): Promise<{ bytes: Buffer; contentType: string }>;
   attach(opts: { variationId: string; itemName: string; bytes: Buffer; contentType?: string; sourceUrl?: string }): Promise<{ imageId: string; url: string }>;
+  setItemImage(itemId: string, imageId: string): Promise<void>;
 }
 
 /** Download the first URL that comes back as a Square-allowed image type; null if none do. */
@@ -49,8 +53,10 @@ export function liveEnrichOps(cfg: SquareConfig): EnrichOps {
     search: (q) => searchImages(q),
     score: (info, cands) => scoreImages(info, cands),
     variationImageIds: (vid) => getVariationImageIds(cfg, vid),
+    itemImageIds: (iid) => getItemImageIds(cfg, iid),
     download: (url) => downloadImage(url),
     attach: (o) => attachVariationImage(cfg, o),
+    setItemImage: (iid, imgId) => setItemImage(cfg, iid, imgId),
   };
 }
 
@@ -72,6 +78,7 @@ interface MappingRow {
   vendor: string | null;
   vendor_sku: string | null;
   square_variation_id: string;
+  square_item_id: string | null;
   item_name: string | null;
   variation_name: string | null;
   item_description: string | null;
@@ -84,8 +91,8 @@ export async function enrichImages(db: Queryable, clientId: string, opts: Enrich
   const limit = opts.limit ?? 20;
 
   const { rows } = await db.query(
-    `select seq, vendor, vendor_sku, square_variation_id, item_name, variation_name, item_description, gems,
-            rejected_image_urls
+    `select seq, vendor, vendor_sku, square_variation_id, square_item_id, item_name, variation_name,
+            item_description, gems, rejected_image_urls
        from catalog_mapping
       where client_id = $1 and status = 'PENDING' and coalesce(square_variation_id, '') <> ''
       order by seq
@@ -154,6 +161,18 @@ export async function enrichImages(db: Queryable, clientId: string, opts: Enrich
           [clientId, r.seq, dl.url, attached.imageId],
         );
         result.enriched++;
+
+        // The first enriched variation of an item also becomes the item's grid image — but only
+        // when the item has none yet, so we never overwrite an existing item image.
+        if (r.square_item_id) {
+          try {
+            if ((await ops.itemImageIds(r.square_item_id)).length === 0) {
+              await ops.setItemImage(r.square_item_id, attached.imageId);
+            }
+          } catch {
+            /* best-effort; the variation image is already attached */
+          }
+        }
       } else {
         await setStatus(db, clientId, r.seq, 'NO_IMAGE');
         result.noImage++;
