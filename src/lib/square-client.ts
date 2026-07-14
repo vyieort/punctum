@@ -106,6 +106,19 @@ export async function getVariationImageIds(cfg: SquareConfig, variationId: strin
   return j.object?.item_variation_data?.image_ids ?? [];
 }
 
+/** Content types Square accepts for a catalog image. */
+const ALLOWED_IMAGE_TYPE = /^image\/(jpeg|pjpeg|png|x-png|gif)/i;
+export function isAllowedImageType(contentType: string): boolean {
+  return ALLOWED_IMAGE_TYPE.test(contentType);
+}
+
+/** Small stable hash (djb2) for building a per-image idempotency key. */
+function shortHash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
 /** Fetch an image URL to bytes (for the multipart upload Square requires). */
 export async function downloadImage(
   url: string,
@@ -124,12 +137,14 @@ export async function downloadImage(
  */
 export async function attachVariationImage(
   cfg: SquareConfig,
-  opts: { variationId: string; itemName: string; bytes: Buffer; contentType?: string; fileName?: string },
+  opts: { variationId: string; itemName: string; bytes: Buffer; contentType?: string; fileName?: string; sourceUrl?: string },
 ): Promise<{ imageId: string; url: string }> {
   const base = cfg.baseUrl ?? BASE_URLS[cfg.env];
   const doFetch = cfg.fetchImpl ?? globalThis.fetch;
   const request = JSON.stringify({
-    idempotency_key: `${opts.variationId}-var-img`,
+    // Key is per-image (hash of the source URL) so a retry with a different image doesn't
+    // collide with a prior failed attempt's key.
+    idempotency_key: `${opts.variationId}-${opts.sourceUrl ? shortHash(opts.sourceUrl) : 'img'}`,
     image: { type: 'IMAGE', id: '#temp_image', image_data: { name: opts.itemName || 'Product Image', caption: '' } },
     object_id: opts.variationId,
   });

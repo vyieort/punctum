@@ -33,6 +33,7 @@ interface FakeCfg {
   candidates?: ImageCandidate[];
   vision?: VisionResult;
   throwOnSearch?: boolean;
+  contentTypes?: Record<string, string>; // per-url content-type from download (default image/jpeg)
 }
 
 function fakeOps(cfg: FakeCfg = {}) {
@@ -46,11 +47,13 @@ function fakeOps(cfg: FakeCfg = {}) {
     },
     score: async () => {
       calls.score++;
-      return cfg.vision ?? { match: 1, confidence: 8, reason: 'ok', action: 'ENRICHED', imageUrl: 'https://p/1.jpg' };
+      return (
+        cfg.vision ?? { match: 1, confidence: 8, reason: 'ok', action: 'ENRICHED', imageUrl: 'https://p/1.jpg', thumbUrl: 'https://t/1.jpg' }
+      );
     },
-    download: async () => {
+    download: async (url) => {
       calls.download++;
-      return { bytes: Buffer.from('img'), contentType: 'image/jpeg' };
+      return { bytes: Buffer.from('img'), contentType: cfg.contentTypes?.[url] ?? 'image/jpeg' };
     },
     attach: async () => {
       calls.attach++;
@@ -82,10 +85,33 @@ test('confident match: downloads, attaches, sets ENRICHED + image_url', async ()
   assert.match(cand.image_candidates ?? '', /pushUrl/); // candidate pool kept for "review alternatives"
 });
 
+test('falls back to the thumbnail when the full-size url returns HTML', async () => {
+  const db = await seeded();
+  await addRow(db, 'S1', 'V1');
+  const { ops } = fakeOps({ contentTypes: { 'https://p/1.jpg': 'text/html' } }); // pushUrl is a webpage
+  const r = await enrichImages(db as unknown as Queryable, 'RE', { ops });
+  assert.equal(r.enriched, 1);
+  assert.equal((await statusOf(db, 'S1')).image_url, 'https://t/1.jpg'); // used the reliable thumbnail
+});
+
+test('neither url is a valid image -> NO_IMAGE, no attach, but candidates kept', async () => {
+  const db = await seeded();
+  await addRow(db, 'S1', 'V1');
+  const { ops, calls } = fakeOps({ contentTypes: { 'https://p/1.jpg': 'text/html', 'https://t/1.jpg': 'text/html' } });
+  const r = await enrichImages(db as unknown as Queryable, 'RE', { ops });
+  assert.equal(r.noImage, 1);
+  assert.equal(calls.attach, 0);
+  assert.equal((await statusOf(db, 'S1')).status, 'NO_IMAGE');
+  const cand = (
+    await db.query<{ image_candidates: string | null }>(`select image_candidates from catalog_mapping where vendor_sku='S1'`)
+  ).rows[0]!;
+  assert.match(cand.image_candidates ?? '', /pushUrl/); // still available for manual review
+});
+
 test('weak match: sets NO_IMAGE and never attaches', async () => {
   const db = await seeded();
   await addRow(db, 'S1', 'V1');
-  const { ops, calls } = fakeOps({ vision: { match: 0, confidence: 2, reason: 'none', action: 'NO_IMAGE', imageUrl: '' } });
+  const { ops, calls } = fakeOps({ vision: { match: 0, confidence: 2, reason: 'none', action: 'NO_IMAGE', imageUrl: '', thumbUrl: '' } });
   const r = await enrichImages(db as unknown as Queryable, 'RE', { ops });
   assert.equal(r.noImage, 1);
   assert.equal(calls.attach, 0);

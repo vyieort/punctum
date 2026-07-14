@@ -20,6 +20,7 @@ export interface VisionScore {
 export interface VisionResult extends VisionScore {
   action: 'ENRICHED' | 'NO_IMAGE';
   imageUrl: string; // pushUrl of the chosen candidate, '' when none
+  thumbUrl: string; // gstatic thumbnail of the chosen candidate (reliable image fallback)
 }
 
 const LBAR_RE = /nostril nail|l-?bar|nose stud|nose bone|nostril screw/i;
@@ -61,16 +62,21 @@ export async function scoreImages(
   opts: AnthropicOptions = {},
 ): Promise<VisionResult> {
   if (candidates.length === 0) {
-    return { match: 0, confidence: 0, reason: 'no candidates', action: 'NO_IMAGE', imageUrl: '' };
+    return { match: 0, confidence: 0, reason: 'no candidates', action: 'NO_IMAGE', imageUrl: '', thumbUrl: '' };
   }
   const text = await anthropicText(
     { system: '', model: VISION_MODEL, maxTokens: VISION_MAX_TOKENS, messages: [{ role: 'user', content: buildVisionMessage(productInfo, candidates) }] },
     opts,
   );
   const score = parseVisionScore(text);
-  const rawUrl =
-    score.match >= 1 && score.match <= candidates.length ? (candidates[score.match - 1]?.pushUrl ?? '') : '';
+  const chosen = score.match >= 1 && score.match <= candidates.length ? candidates[score.match - 1] : undefined;
+  const rawUrl = chosen?.pushUrl ?? '';
   const action: 'ENRICHED' | 'NO_IMAGE' =
     score.match > 0 && score.confidence >= MIN_CONFIDENCE && rawUrl ? 'ENRICHED' : 'NO_IMAGE';
-  return { ...score, action, imageUrl: action === 'ENRICHED' ? rawUrl : '' };
+  return {
+    ...score,
+    action,
+    imageUrl: action === 'ENRICHED' ? rawUrl : '',
+    thumbUrl: action === 'ENRICHED' ? (chosen?.thumb ?? '') : '',
+  };
 }

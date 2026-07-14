@@ -405,12 +405,13 @@ const server = createServer(async (req, res) => {
     const client = url.searchParams.get('client') ?? 'RE';
     const seq = url.searchParams.get('seq');
     const imageUrl = url.searchParams.get('url');
+    const thumbUrl = url.searchParams.get('thumb') ?? '';
     if (!seq || !imageUrl) {
       sendJson(res, 400, { error: "missing required query params: 'seq' and 'url'" });
       return;
     }
     try {
-      const result = await setVariationImage(getPool() as unknown as Queryable, client, seq, imageUrl);
+      const result = await setVariationImage(getPool() as unknown as Queryable, client, seq, imageUrl, thumbUrl);
       sendJson(res, result.ok ? 200 : 404, result);
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });

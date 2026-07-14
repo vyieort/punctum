@@ -10,6 +10,7 @@ import {
   deleteCatalogObject,
   downloadImage,
   attachVariationImage,
+  isAllowedImageType,
   type SquareConfig,
 } from '../lib/square-client.js';
 
@@ -186,7 +187,7 @@ function renderGallery(cands){
   var grid=document.createElement('div'); grid.className='galgrid';
   cands.forEach(function(c){
     var im=document.createElement('img'); im.src=c.thumb; im.className='galimg'; im.title='Use this image';
-    im.addEventListener('click', function(){ useImage(c.pushUrl, im); });
+    im.addEventListener('click', function(){ useImage(c.pushUrl, c.thumb, im); });
     grid.appendChild(im);
   });
   g.appendChild(grid);
@@ -194,10 +195,10 @@ function renderGallery(cands){
   clr.addEventListener('click', clearImg); g.appendChild(clr);
   g.style.display='block';
 }
-async function useImage(url, im){
+async function useImage(url, thumb, im){
   im.style.outline='3px solid #166534';
   try{
-    var res=await fetch('/catalog/set-image?client=RE&seq='+encodeURIComponent(activeSeq)+'&url='+encodeURIComponent(url),{method:'POST'});
+    var res=await fetch('/catalog/set-image?client=RE&seq='+encodeURIComponent(activeSeq)+'&url='+encodeURIComponent(url)+'&thumb='+encodeURIComponent(thumb||''),{method:'POST'});
     if(res.ok){
       var th=activeTr.querySelector('.thumb'); if(th){ th.src=url; th.setAttribute('data-url', url); }
       var badge=activeTr.querySelector('.badge'); if(badge){ badge.textContent='ENRICHED'; badge.style.background='#166534'; }
@@ -226,7 +227,24 @@ async function clearImg(){
 export interface ImageEditOps {
   deleteImage(imageId: string): Promise<void>;
   download(url: string): Promise<{ bytes: Buffer; contentType: string }>;
-  attach(opts: { variationId: string; itemName: string; bytes: Buffer; contentType?: string }): Promise<{ imageId: string; url: string }>;
+  attach(opts: { variationId: string; itemName: string; bytes: Buffer; contentType?: string; sourceUrl?: string }): Promise<{ imageId: string; url: string }>;
+}
+
+/** Download the first URL that is a Square-allowed image type (full-size, then thumbnail). */
+async function downloadValidated(
+  ops: ImageEditOps,
+  urls: Array<string | undefined>,
+): Promise<{ bytes: Buffer; contentType: string; url: string } | null> {
+  for (const url of urls) {
+    if (!url) continue;
+    try {
+      const dl = await ops.download(url);
+      if (isAllowedImageType(dl.contentType)) return { bytes: dl.bytes, contentType: dl.contentType, url };
+    } catch {
+      // try the next url
+    }
+  }
+  return null;
 }
 
 export function liveImageEditOps(cfg: SquareConfig): ImageEditOps {
@@ -262,12 +280,13 @@ export async function getCandidates(
   return { candidates, itemName: stripTagSuffix(row.item_name ?? '') };
 }
 
-/** Replace the variation's image with a reviewer-chosen candidate. */
+/** Replace the variation's image with a reviewer-chosen candidate (thumbnail as fallback). */
 export async function setVariationImage(
   db: Queryable,
   clientId: string,
   seq: string,
   chosenUrl: string,
+  thumbUrl: string,
   opts: { ops?: ImageEditOps } = {},
 ): Promise<{ ok: boolean }> {
   const ops = opts.ops ?? liveImageEditOps(squareConfigFromEnv());
@@ -278,13 +297,22 @@ export async function setVariationImage(
   if (rows.length === 0) return { ok: false };
   const row = rows[0] as { square_variation_id: string; item_name: string | null; square_image_id: string | null };
 
+  // Get a valid image before touching the existing one, so a bad URL never leaves it blank.
+  const dl = await downloadValidated(ops, [chosenUrl, thumbUrl]);
+  if (!dl) return { ok: false };
+
   if (row.square_image_id) await ops.deleteImage(row.square_image_id).catch(() => {});
-  const { bytes, contentType } = await ops.download(chosenUrl);
-  const attached = await ops.attach({ variationId: row.square_variation_id, itemName: row.item_name ?? '', bytes, contentType });
+  const attached = await ops.attach({
+    variationId: row.square_variation_id,
+    itemName: row.item_name ?? '',
+    bytes: dl.bytes,
+    contentType: dl.contentType,
+    sourceUrl: dl.url,
+  });
   await db.query(
     `update catalog_mapping set status = 'ENRICHED', image_url = $3, square_image_id = $4, updated_at = now()
        where client_id = $1 and seq = $2`,
-    [clientId, seq, chosenUrl, attached.imageId],
+    [clientId, seq, dl.url, attached.imageId],
   );
   return { ok: true };
 }

@@ -12,6 +12,7 @@ import {
   getVariationImageIds,
   downloadImage,
   attachVariationImage,
+  isAllowedImageType,
   type SquareConfig,
 } from '../lib/square-client.js';
 import { searchImages, type ImageCandidate } from '../lib/serpapi.js';
@@ -23,7 +24,24 @@ export interface EnrichOps {
   score(productInfo: string, candidates: ImageCandidate[]): Promise<VisionResult>;
   variationImageIds(variationId: string): Promise<string[]>;
   download(url: string): Promise<{ bytes: Buffer; contentType: string }>;
-  attach(opts: { variationId: string; itemName: string; bytes: Buffer; contentType?: string }): Promise<{ imageId: string; url: string }>;
+  attach(opts: { variationId: string; itemName: string; bytes: Buffer; contentType?: string; sourceUrl?: string }): Promise<{ imageId: string; url: string }>;
+}
+
+/** Download the first URL that comes back as a Square-allowed image type; null if none do. */
+async function downloadValidated(
+  ops: EnrichOps,
+  urls: Array<string | undefined>,
+): Promise<{ bytes: Buffer; contentType: string; url: string } | null> {
+  for (const url of urls) {
+    if (!url) continue;
+    try {
+      const dl = await ops.download(url);
+      if (isAllowedImageType(dl.contentType)) return { bytes: dl.bytes, contentType: dl.contentType, url };
+    } catch {
+      // try the next url
+    }
+  }
+  return null;
 }
 
 export function liveEnrichOps(cfg: SquareConfig): EnrichOps {
@@ -108,25 +126,36 @@ export async function enrichImages(db: Queryable, clientId: string, opts: Enrich
       );
       const usable = rejected.size ? candidates.filter((c) => !rejected.has(c.pushUrl)) : candidates;
       const scored = await ops.score(productInfo, usable);
-      // Keep the candidate pool so the review page can offer alternatives later (no re-search).
+      // Persist the candidate pool FIRST, so "review alternatives" works even if the attach fails.
       const candJson = JSON.stringify(usable.map((c) => ({ thumb: c.thumb, pushUrl: c.pushUrl })));
+      await db.query(
+        `update catalog_mapping set image_candidates = $3, updated_at = now() where client_id = $1 and seq = $2`,
+        [clientId, r.seq, candJson],
+      );
 
-      if (scored.action === 'ENRICHED' && scored.imageUrl) {
-        const { bytes, contentType } = await ops.download(scored.imageUrl);
-        const attached = await ops.attach({ variationId: r.square_variation_id, itemName: r.item_name ?? '', bytes, contentType });
+      // Download the chosen image, falling back to the gstatic thumbnail when the full-size URL
+      // isn't a real image (hotlink page / HTML). Neither valid -> NO_IMAGE.
+      const dl =
+        scored.action === 'ENRICHED' && scored.imageUrl
+          ? await downloadValidated(ops, [scored.imageUrl, scored.thumbUrl])
+          : null;
+
+      if (dl) {
+        const attached = await ops.attach({
+          variationId: r.square_variation_id,
+          itemName: r.item_name ?? '',
+          bytes: dl.bytes,
+          contentType: dl.contentType,
+          sourceUrl: dl.url,
+        });
         await db.query(
-          `update catalog_mapping set status = 'ENRICHED', image_url = $3, square_image_id = $4,
-                  image_candidates = $5, updated_at = now()
+          `update catalog_mapping set status = 'ENRICHED', image_url = $3, square_image_id = $4, updated_at = now()
              where client_id = $1 and seq = $2`,
-          [clientId, r.seq, scored.imageUrl, attached.imageId, candJson],
+          [clientId, r.seq, dl.url, attached.imageId],
         );
         result.enriched++;
       } else {
-        await db.query(
-          `update catalog_mapping set status = 'NO_IMAGE', image_candidates = $3, updated_at = now()
-             where client_id = $1 and seq = $2`,
-          [clientId, r.seq, candJson],
-        );
+        await setStatus(db, clientId, r.seq, 'NO_IMAGE');
         result.noImage++;
       }
     } catch (e) {

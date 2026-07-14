@@ -90,7 +90,7 @@ test('setVariationImage swaps the Square image and marks ENRICHED', async () => 
   const db = await seeded();
   const seq = await addRow(db, { sku: 'S1', vid: 'V1', status: 'NO_IMAGE', imageId: 'IMG_OLD', candidates: CANDS });
   const { ops, calls } = fakeEditOps();
-  const r = await setVariationImage(db as unknown as Queryable, 'RE', seq, 'https://p/2.jpg', { ops });
+  const r = await setVariationImage(db as unknown as Queryable, 'RE', seq, 'https://p/2.jpg', 'https://t/2.jpg', { ops });
   assert.equal(r.ok, true);
   assert.deepEqual(calls.deleted, ['IMG_OLD']); // old image removed first
   assert.deepEqual(calls.downloaded, ['https://p/2.jpg']);
@@ -125,6 +125,6 @@ test('clearVariationImage removes the image and marks NO_IMAGE', async () => {
 test('setVariationImage on an unknown row is a no-op', async () => {
   const db = await seeded();
   const { ops } = fakeEditOps();
-  const r = await setVariationImage(db as unknown as Queryable, 'RE', '999999', 'https://p/2.jpg', { ops });
+  const r = await setVariationImage(db as unknown as Queryable, 'RE', '999999', 'https://p/2.jpg', 'https://t/2.jpg', { ops });
   assert.equal(r.ok, false);
 });

@@ -41,6 +41,7 @@ test('scoreImages returns ENRICHED with the chosen pushUrl when confident', asyn
   });
   assert.equal(r.action, 'ENRICHED');
   assert.equal(r.imageUrl, 'https://p/2.jpg');
+  assert.equal(r.thumbUrl, 'https://t/2.jpg'); // thumbnail of the chosen candidate (fallback source)
 });
 
 test('scoreImages returns NO_IMAGE below the confidence threshold', async () => {
