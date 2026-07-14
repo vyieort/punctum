@@ -15,6 +15,7 @@ async function seeded(): Promise<PGlite> {
   const db = new PGlite();
   await db.exec(mig('0001_init.sql'));
   await db.exec(mig('0004_image_reject.sql'));
+  await db.exec(mig('0005_image_candidates.sql'));
   await db.exec(`insert into clients (id,name) values ('RE','Ritual Evolution')`);
   return db;
 }
@@ -75,6 +76,10 @@ test('confident match: downloads, attaches, sets ENRICHED + image_url', async ()
   const row = await statusOf(db, 'S1');
   assert.equal(row.status, 'ENRICHED');
   assert.equal(row.image_url, 'https://p/1.jpg');
+  const cand = (
+    await db.query<{ image_candidates: string | null }>(`select image_candidates from catalog_mapping where vendor_sku='S1'`)
+  ).rows[0]!;
+  assert.match(cand.image_candidates ?? '', /pushUrl/); // candidate pool kept for "review alternatives"
 });
 
 test('weak match: sets NO_IMAGE and never attaches', async () => {

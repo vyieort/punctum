@@ -21,7 +21,7 @@ import { runComparison } from './jobs/compare.js';
 import { runImport } from './jobs/import.js';
 import { wipeSandboxCatalog } from './jobs/wipe.js';
 import { enrichImages } from './jobs/enrich-images.js';
-import { getCatalogRows, renderCatalogPage, rejectImage } from './review/catalog.js';
+import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, clearVariationImage } from './review/catalog.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -385,7 +385,8 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
-  if (url.pathname === '/catalog/reject' && req.method === 'POST') {
+  // Review-alternatives: read the stored candidate pool for a variation.
+  if (url.pathname === '/catalog/candidates' && req.method === 'GET') {
     const client = url.searchParams.get('client') ?? 'RE';
     const seq = url.searchParams.get('seq');
     if (!seq) {
@@ -393,8 +394,40 @@ const server = createServer(async (req, res) => {
       return;
     }
     try {
-      const result = await rejectImage(getPool() as unknown as Queryable, client, seq);
-      sendJson(res, result.rejected ? 200 : 404, result);
+      sendJson(res, 200, await getCandidates(getPool() as unknown as Queryable, client, seq));
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+  // Replace a variation's image with a chosen candidate.
+  if (url.pathname === '/catalog/set-image' && req.method === 'POST') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    const seq = url.searchParams.get('seq');
+    const imageUrl = url.searchParams.get('url');
+    if (!seq || !imageUrl) {
+      sendJson(res, 400, { error: "missing required query params: 'seq' and 'url'" });
+      return;
+    }
+    try {
+      const result = await setVariationImage(getPool() as unknown as Queryable, client, seq, imageUrl);
+      sendJson(res, result.ok ? 200 : 404, result);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+  // Clear a variation's image (none of the candidates fit).
+  if (url.pathname === '/catalog/clear-image' && req.method === 'POST') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    const seq = url.searchParams.get('seq');
+    if (!seq) {
+      sendJson(res, 400, { error: "missing required query param: 'seq'" });
+      return;
+    }
+    try {
+      const result = await clearVariationImage(getPool() as unknown as Queryable, client, seq);
+      sendJson(res, result.ok ? 200 : 404, result);
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }

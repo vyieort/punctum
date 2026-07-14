@@ -1,11 +1,17 @@
-// Catalog review page: a sticky ~500px image preview pinned on top, and a scrolling list of
-// every catalog_mapping variation beneath it. Each imaged row has a "Show" button that loads
-// its match into the top preview (the URL is also on the right, click to open full size), and
-// a "Reject" button that deletes the wrong image from Square and re-queues the variation
-// (excluding the rejected URL) so the next enrich run finds a different one.
+// Catalog review page: a sticky ~500px preview pinned on top, and a scrolling list of every
+// catalog_mapping variation beneath it. Each imaged row shows a 50x50 thumbnail (click to
+// enlarge in the preview). Rows that kept a candidate pool from enrichment get a "Review
+// alternatives" button: it shows the 5-10 candidates as a gallery up top, and you either pick
+// a different one (replaces the Square image) or clear it — no re-search, no re-running Vision.
 
 import type { Queryable } from '../jobs/pg-rows.js';
-import { squareConfigFromEnv, deleteCatalogObject, type SquareConfig } from '../lib/square-client.js';
+import {
+  squareConfigFromEnv,
+  deleteCatalogObject,
+  downloadImage,
+  attachVariationImage,
+  type SquareConfig,
+} from '../lib/square-client.js';
 
 export interface CatalogRow {
   seq: string;
@@ -17,6 +23,7 @@ export interface CatalogRow {
   status: string;
   retailPrice: string;
   imageUrl: string;
+  hasCandidates: boolean;
   squareItemId: string;
 }
 
@@ -25,7 +32,8 @@ const stripTagSuffix = (name: string): string => name.replace(/\s*\[.*\]\s*$/, '
 export async function getCatalogRows(db: Queryable, clientId: string, limit = 1000): Promise<CatalogRow[]> {
   const { rows } = await db.query(
     `select seq, vendor, vendor_sku, square_item_id, item_name, variation_name, tags,
-            status::text as status, retail_price::text as retail_price, image_url
+            status::text as status, retail_price::text as retail_price, image_url,
+            coalesce(image_candidates, '') <> '' as has_candidates
        from catalog_mapping
       where client_id = $1 and coalesce(square_variation_id, '') <> ''
       order by item_name, variation_name
@@ -45,6 +53,7 @@ export async function getCatalogRows(db: Queryable, clientId: string, limit = 10
       status: str(row.status),
       retailPrice: str(row.retail_price),
       imageUrl: str(row.image_url),
+      hasCandidates: row.has_candidates === true,
       squareItemId: str(row.square_item_id),
     };
   });
@@ -81,8 +90,10 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
         ? `<a href="${esc(r.imageUrl)}" target="_blank" rel="noreferrer" class="url">${esc(r.imageUrl)}</a>`
         : '';
       const price = r.retailPrice ? `$${esc(r.retailPrice)}` : '';
-      const reject = r.imageUrl ? `<button class="rej" data-seq="${esc(r.seq)}">Reject</button>` : '';
-      return `<tr>
+      const alts = r.hasCandidates
+        ? `<button class="alts" data-seq="${esc(r.seq)}" data-cap="${esc(caption)}">Review alternatives</button>`
+        : '';
+      return `<tr id="row-${esc(r.seq)}">
         <td class="showcell">${thumb}</td>
         <td><div class="item">${esc(r.itemName)}</div>${r.tags ? `<div class="tags">${esc(r.tags)}</div>` : ''}</td>
         <td>${esc(r.variationName)}</td>
@@ -91,7 +102,7 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
         <td>${price}</td>
         <td><span class="badge" style="background:${color}">${esc(r.status)}</span></td>
         <td class="url-td">${urlCell}</td>
-        <td>${reject}</td>
+        <td>${alts}</td>
       </tr>`;
     })
     .join('');
@@ -109,6 +120,12 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
     color:#9ca3af;border:1px dashed #d1d5db;border-radius:8px;font-size:14px}
   .pvmeta{margin-top:.5rem;font-size:13px;color:#374151;text-align:center}
   .pvmeta a{color:#2563eb;margin-left:.5rem}
+  #gallery{display:none;width:100%;max-width:800px}
+  .galtitle{font-size:13px;color:#374151;margin:.25rem 0 .6rem;text-align:center}
+  .galgrid{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+  .galimg{width:140px;height:140px;object-fit:cover;border-radius:6px;border:1px solid #e5e7eb;cursor:pointer;background:#f3f4f6}
+  .galimg:hover{outline:2px solid #2563eb}
+  .galclear{margin:.8rem auto 0;display:block;font:inherit;font-size:13px;padding:.35rem .8rem;border:1px solid #b45309;color:#b45309;background:#fff;border-radius:6px;cursor:pointer}
   table{border-collapse:collapse;width:100%;font-size:13px}
   th,td{border-bottom:1px solid #eee;padding:.5rem .6rem;text-align:left;vertical-align:top}
   th{color:#666;font-weight:600}
@@ -119,17 +136,17 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
   .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#374151}
   .badge{color:#fff;border-radius:999px;padding:.1rem .5rem;font-size:11px;font-weight:600;white-space:nowrap}
   .url{color:#2563eb;font-size:11px;word-break:break-all;display:inline-block;max-width:280px} .url-td{max-width:300px}
-  .rej{font:inherit;font-size:12px;padding:.25rem .6rem;border:1px solid #b91c1c;color:#b91c1c;background:#fff;border-radius:6px;cursor:pointer}
-  .rej:disabled{opacity:.6;cursor:default}
+  .alts{font:inherit;font-size:12px;padding:.25rem .6rem;border:1px solid #2563eb;color:#2563eb;background:#fff;border-radius:6px;cursor:pointer;white-space:nowrap}
+  .alts:disabled{opacity:.6;cursor:default}
   tr.active{background:#f0fdf4} tr.active .thumb{outline:2px solid #166534}
-  tr.rejected{opacity:.45}
 </style></head>
 <body>
   <h2>Catalog review</h2>
-  <p class="sub">${rows.length} variations${countLine ? ' — ' + esc(countLine) : ''}. Click a <strong>thumbnail</strong> to preview it large up top; <strong>Reject</strong> removes a wrong image and re-queues it for a new match.</p>
+  <p class="sub">${rows.length} variations${countLine ? ' — ' + esc(countLine) : ''}. Click a <strong>thumbnail</strong> to preview it large up top. <strong>Review alternatives</strong> shows the other candidates — pick a better one or clear the image.</p>
   <div id="preview">
     <img id="pv" alt="" style="display:none">
     <div id="pvempty">Click a thumbnail to preview its image here (500×500).</div>
+    <div id="gallery"></div>
     <div class="pvmeta"><span id="pvcap"></span><a id="pvlink" href="#" target="_blank" rel="noreferrer" style="display:none">open full size ↗</a></div>
   </div>
   <table>
@@ -137,70 +154,160 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
     <tbody>${body}</tbody>
   </table>
 <script>
-function show(url, cap, tr){
-  var pv=document.getElementById('pv'), e=document.getElementById('pvempty');
-  pv.src=url; pv.style.display='block'; e.style.display='none';
+var activeSeq=null, activeTr=null, activeCap='';
+function setActive(tr){ document.querySelectorAll('tr.active').forEach(function(t){t.classList.remove('active');}); if(tr) tr.classList.add('active'); }
+function showSingle(url, cap, tr){
+  document.getElementById('gallery').style.display='none';
+  var pv=document.getElementById('pv'); pv.src=url; pv.style.display='block';
+  document.getElementById('pvempty').style.display='none';
   document.getElementById('pvcap').textContent=cap||'';
   var l=document.getElementById('pvlink'); l.href=url; l.style.display='inline';
-  document.querySelectorAll('tr.active').forEach(function(t){t.classList.remove('active');});
-  if(tr) tr.classList.add('active');
+  setActive(tr);
 }
 document.querySelectorAll('.thumb').forEach(function(b){
-  b.addEventListener('click', function(){ show(b.getAttribute('data-url'), b.getAttribute('data-cap'), b.closest('tr')); });
+  b.addEventListener('click', function(){ showSingle(b.getAttribute('data-url'), b.getAttribute('data-cap'), b.closest('tr')); });
 });
-document.querySelectorAll('.rej').forEach(function(b){
+document.querySelectorAll('.alts').forEach(function(b){
   b.addEventListener('click', async function(){
-    if(!confirm('Remove this image and re-queue this variation for a new match?')) return;
+    activeSeq=b.getAttribute('data-seq'); activeTr=b.closest('tr'); activeCap=b.getAttribute('data-cap');
     b.disabled=true; b.textContent='…';
     try{
-      var res=await fetch('/catalog/reject?client=RE&seq='+encodeURIComponent(b.getAttribute('data-seq')),{method:'POST'});
-      if(res.ok){ b.closest('tr').classList.add('rejected'); b.textContent='Rejected'; }
-      else { b.disabled=false; b.textContent='Reject'; alert('Error '+res.status); }
-    }catch(e){ b.disabled=false; b.textContent='Reject'; alert(e.message); }
+      var res=await fetch('/catalog/candidates?client=RE&seq='+encodeURIComponent(activeSeq));
+      var j=await res.json();
+      renderGallery(j.candidates||[]); setActive(activeTr);
+    }catch(e){ alert(e.message); }
+    b.disabled=false; b.textContent='Review alternatives';
   });
 });
+function renderGallery(cands){
+  var g=document.getElementById('gallery'); g.innerHTML='';
+  document.getElementById('pv').style.display='none'; document.getElementById('pvempty').style.display='none';
+  var t=document.createElement('div'); t.className='galtitle'; t.textContent=(cands.length?'Pick the best match for: ':'No stored candidates for: ')+activeCap; g.appendChild(t);
+  var grid=document.createElement('div'); grid.className='galgrid';
+  cands.forEach(function(c){
+    var im=document.createElement('img'); im.src=c.thumb; im.className='galimg'; im.title='Use this image';
+    im.addEventListener('click', function(){ useImage(c.pushUrl, im); });
+    grid.appendChild(im);
+  });
+  g.appendChild(grid);
+  var clr=document.createElement('button'); clr.className='galclear'; clr.textContent='✕ None of these — clear image';
+  clr.addEventListener('click', clearImg); g.appendChild(clr);
+  g.style.display='block';
+}
+async function useImage(url, im){
+  im.style.outline='3px solid #166534';
+  try{
+    var res=await fetch('/catalog/set-image?client=RE&seq='+encodeURIComponent(activeSeq)+'&url='+encodeURIComponent(url),{method:'POST'});
+    if(res.ok){
+      var th=activeTr.querySelector('.thumb'); if(th){ th.src=url; th.setAttribute('data-url', url); }
+      var badge=activeTr.querySelector('.badge'); if(badge){ badge.textContent='ENRICHED'; badge.style.background='#166534'; }
+      var u=activeTr.querySelector('.url'); if(u){ u.href=url; u.textContent=url; }
+      showSingle(url, activeCap, activeTr);
+    } else { im.style.outline=''; alert('Error '+res.status); }
+  }catch(e){ im.style.outline=''; alert(e.message); }
+}
+async function clearImg(){
+  try{
+    var res=await fetch('/catalog/clear-image?client=RE&seq='+encodeURIComponent(activeSeq),{method:'POST'});
+    if(res.ok){
+      var th=activeTr.querySelector('.thumb'); if(th){ var d=document.createElement('span'); d.className='nothumb'; d.textContent='—'; th.replaceWith(d); }
+      var badge=activeTr.querySelector('.badge'); if(badge){ badge.textContent='NO_IMAGE'; badge.style.background='#b45309'; }
+      var u=activeTr.querySelector('.url'); if(u) u.remove();
+      document.getElementById('gallery').style.display='none'; document.getElementById('pvempty').style.display='flex';
+    } else alert('Error '+res.status);
+  }catch(e){ alert(e.message); }
+}
 </script>
 </body></html>`;
 }
 
-// --- Reject: remove the wrong image from Square + re-queue for a fresh (different) match. ---
+// --- Alternatives backend: read candidates, replace the image, or clear it. ---
 
-export interface RejectOps {
+export interface ImageEditOps {
   deleteImage(imageId: string): Promise<void>;
+  download(url: string): Promise<{ bytes: Buffer; contentType: string }>;
+  attach(opts: { variationId: string; itemName: string; bytes: Buffer; contentType?: string }): Promise<{ imageId: string; url: string }>;
 }
 
-export function liveRejectOps(cfg: SquareConfig): RejectOps {
-  return { deleteImage: (id) => deleteCatalogObject(cfg, id) };
+export function liveImageEditOps(cfg: SquareConfig): ImageEditOps {
+  return {
+    deleteImage: (id) => deleteCatalogObject(cfg, id),
+    download: (url) => downloadImage(url),
+    attach: (o) => attachVariationImage(cfg, o),
+  };
 }
 
-export async function rejectImage(
+export interface Candidate {
+  thumb: string;
+  pushUrl: string;
+}
+
+export async function getCandidates(
   db: Queryable,
   clientId: string,
   seq: string,
-  opts: { ops?: RejectOps } = {},
-): Promise<{ rejected: boolean }> {
-  const ops = opts.ops ?? liveRejectOps(squareConfigFromEnv());
+): Promise<{ candidates: Candidate[]; itemName: string }> {
   const { rows } = await db.query(
-    `select square_image_id, image_url, rejected_image_urls from catalog_mapping where client_id = $1 and seq = $2`,
+    `select item_name, image_candidates from catalog_mapping where client_id = $1 and seq = $2`,
     [clientId, seq],
   );
-  if (rows.length === 0) return { rejected: false };
-  const row = rows[0] as { square_image_id: string | null; image_url: string | null; rejected_image_urls: string | null };
-
-  if (row.square_image_id) {
-    // Best-effort delete; still clear the DB even if Square already lost the object.
-    await ops.deleteImage(row.square_image_id).catch(() => {});
+  if (rows.length === 0) return { candidates: [], itemName: '' };
+  const row = rows[0] as { item_name: string | null; image_candidates: string | null };
+  let candidates: Candidate[] = [];
+  try {
+    candidates = row.image_candidates ? (JSON.parse(row.image_candidates) as Candidate[]) : [];
+  } catch {
+    candidates = [];
   }
-  const rejectedList = [row.rejected_image_urls, row.image_url]
-    .map((v) => (v ?? '').trim())
-    .filter(Boolean)
-    .join('\n');
+  return { candidates, itemName: stripTagSuffix(row.item_name ?? '') };
+}
 
-  await db.query(
-    `update catalog_mapping
-        set status = 'PENDING', image_url = null, square_image_id = null, rejected_image_urls = $3, updated_at = now()
-      where client_id = $1 and seq = $2`,
-    [clientId, seq, rejectedList || null],
+/** Replace the variation's image with a reviewer-chosen candidate. */
+export async function setVariationImage(
+  db: Queryable,
+  clientId: string,
+  seq: string,
+  chosenUrl: string,
+  opts: { ops?: ImageEditOps } = {},
+): Promise<{ ok: boolean }> {
+  const ops = opts.ops ?? liveImageEditOps(squareConfigFromEnv());
+  const { rows } = await db.query(
+    `select square_variation_id, item_name, square_image_id from catalog_mapping where client_id = $1 and seq = $2`,
+    [clientId, seq],
   );
-  return { rejected: true };
+  if (rows.length === 0) return { ok: false };
+  const row = rows[0] as { square_variation_id: string; item_name: string | null; square_image_id: string | null };
+
+  if (row.square_image_id) await ops.deleteImage(row.square_image_id).catch(() => {});
+  const { bytes, contentType } = await ops.download(chosenUrl);
+  const attached = await ops.attach({ variationId: row.square_variation_id, itemName: row.item_name ?? '', bytes, contentType });
+  await db.query(
+    `update catalog_mapping set status = 'ENRICHED', image_url = $3, square_image_id = $4, updated_at = now()
+       where client_id = $1 and seq = $2`,
+    [clientId, seq, chosenUrl, attached.imageId],
+  );
+  return { ok: true };
+}
+
+/** Remove the variation's image entirely (none of the candidates fit). */
+export async function clearVariationImage(
+  db: Queryable,
+  clientId: string,
+  seq: string,
+  opts: { ops?: ImageEditOps } = {},
+): Promise<{ ok: boolean }> {
+  const ops = opts.ops ?? liveImageEditOps(squareConfigFromEnv());
+  const { rows } = await db.query(
+    `select square_image_id from catalog_mapping where client_id = $1 and seq = $2`,
+    [clientId, seq],
+  );
+  if (rows.length === 0) return { ok: false };
+  const row = rows[0] as { square_image_id: string | null };
+  if (row.square_image_id) await ops.deleteImage(row.square_image_id).catch(() => {});
+  await db.query(
+    `update catalog_mapping set status = 'NO_IMAGE', image_url = null, square_image_id = null, updated_at = now()
+       where client_id = $1 and seq = $2`,
+    [clientId, seq],
+  );
+  return { ok: true };
 }

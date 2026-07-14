@@ -108,18 +108,25 @@ export async function enrichImages(db: Queryable, clientId: string, opts: Enrich
       );
       const usable = rejected.size ? candidates.filter((c) => !rejected.has(c.pushUrl)) : candidates;
       const scored = await ops.score(productInfo, usable);
+      // Keep the candidate pool so the review page can offer alternatives later (no re-search).
+      const candJson = JSON.stringify(usable.map((c) => ({ thumb: c.thumb, pushUrl: c.pushUrl })));
 
       if (scored.action === 'ENRICHED' && scored.imageUrl) {
         const { bytes, contentType } = await ops.download(scored.imageUrl);
         const attached = await ops.attach({ variationId: r.square_variation_id, itemName: r.item_name ?? '', bytes, contentType });
         await db.query(
-          `update catalog_mapping set status = 'ENRICHED', image_url = $3, square_image_id = $4, updated_at = now()
+          `update catalog_mapping set status = 'ENRICHED', image_url = $3, square_image_id = $4,
+                  image_candidates = $5, updated_at = now()
              where client_id = $1 and seq = $2`,
-          [clientId, r.seq, scored.imageUrl, attached.imageId],
+          [clientId, r.seq, scored.imageUrl, attached.imageId, candJson],
         );
         result.enriched++;
       } else {
-        await setStatus(db, clientId, r.seq, 'NO_IMAGE');
+        await db.query(
+          `update catalog_mapping set status = 'NO_IMAGE', image_candidates = $3, updated_at = now()
+             where client_id = $1 and seq = $2`,
+          [clientId, r.seq, candJson],
+        );
         result.noImage++;
       }
     } catch (e) {
