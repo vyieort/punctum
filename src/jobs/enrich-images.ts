@@ -58,6 +58,7 @@ interface MappingRow {
   variation_name: string | null;
   item_description: string | null;
   gems: string | null;
+  rejected_image_urls: string | null;
 }
 
 export async function enrichImages(db: Queryable, clientId: string, opts: EnrichOptions = {}): Promise<EnrichResult> {
@@ -65,7 +66,8 @@ export async function enrichImages(db: Queryable, clientId: string, opts: Enrich
   const limit = opts.limit ?? 20;
 
   const { rows } = await db.query(
-    `select seq, vendor, vendor_sku, square_variation_id, item_name, variation_name, item_description, gems
+    `select seq, vendor, vendor_sku, square_variation_id, item_name, variation_name, item_description, gems,
+            rejected_image_urls
        from catalog_mapping
       where client_id = $1 and status = 'PENDING' and coalesce(square_variation_id, '') <> ''
       order by seq
@@ -97,15 +99,23 @@ export async function enrichImages(db: Queryable, clientId: string, opts: Enrich
       });
 
       const candidates = await ops.search(query);
-      const scored = await ops.score(productInfo, candidates);
+      // Skip any image the reviewer already rejected for this variation.
+      const rejected = new Set(
+        (r.rejected_image_urls ?? '')
+          .split('\n')
+          .map((u) => u.trim())
+          .filter(Boolean),
+      );
+      const usable = rejected.size ? candidates.filter((c) => !rejected.has(c.pushUrl)) : candidates;
+      const scored = await ops.score(productInfo, usable);
 
       if (scored.action === 'ENRICHED' && scored.imageUrl) {
         const { bytes, contentType } = await ops.download(scored.imageUrl);
-        await ops.attach({ variationId: r.square_variation_id, itemName: r.item_name ?? '', bytes, contentType });
+        const attached = await ops.attach({ variationId: r.square_variation_id, itemName: r.item_name ?? '', bytes, contentType });
         await db.query(
-          `update catalog_mapping set status = 'ENRICHED', image_url = $3, updated_at = now()
+          `update catalog_mapping set status = 'ENRICHED', image_url = $3, square_image_id = $4, updated_at = now()
              where client_id = $1 and seq = $2`,
-          [clientId, r.seq, scored.imageUrl],
+          [clientId, r.seq, scored.imageUrl, attached.imageId],
         );
         result.enriched++;
       } else {

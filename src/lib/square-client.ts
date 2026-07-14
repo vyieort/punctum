@@ -91,6 +91,15 @@ export async function batchChangeInventory(cfg: SquareConfig, body: unknown): Pr
   return squareRequest(cfg, '/v2/inventory/changes/batch-create', { method: 'POST', body });
 }
 
+/** Delete a catalog object (e.g. an IMAGE) by id. Ignores a 404 (already gone). */
+export async function deleteCatalogObject(cfg: SquareConfig, id: string): Promise<void> {
+  try {
+    await squareRequest(cfg, `/v2/catalog/object/${id}`, { method: 'DELETE' });
+  } catch (e) {
+    if (!/ 404 /.test((e as Error).message)) throw e;
+  }
+}
+
 /** Existing image ids on a variation — used to skip enrichment when one is already set. */
 export async function getVariationImageIds(cfg: SquareConfig, variationId: string): Promise<string[]> {
   const j = await squareRequest(cfg, `/v2/catalog/object/${variationId}`, { method: 'GET' });

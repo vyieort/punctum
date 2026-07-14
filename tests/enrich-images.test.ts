@@ -14,6 +14,7 @@ const mig = (f: string): string => readFileSync(new URL(`../db/migrations/${f}`,
 async function seeded(): Promise<PGlite> {
   const db = new PGlite();
   await db.exec(mig('0001_init.sql'));
+  await db.exec(mig('0004_image_reject.sql'));
   await db.exec(`insert into clients (id,name) values ('RE','Ritual Evolution')`);
   return db;
 }

@@ -21,6 +21,7 @@ import { runComparison } from './jobs/compare.js';
 import { runImport } from './jobs/import.js';
 import { wipeSandboxCatalog } from './jobs/wipe.js';
 import { enrichImages } from './jobs/enrich-images.js';
+import { getCatalogRows, renderCatalogPage, rejectImage } from './review/catalog.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -370,6 +371,34 @@ const server = createServer(async (req, res) => {
       }
       return;
     }
+  }
+
+  // Catalog review: GET renders the catalog with inline matched images; POST rejects a bad one.
+  if (url.pathname === '/catalog' && req.method === 'GET') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    try {
+      const rows = await getCatalogRows(getPool() as unknown as Queryable, client);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(renderCatalogPage(rows));
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+  if (url.pathname === '/catalog/reject' && req.method === 'POST') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    const seq = url.searchParams.get('seq');
+    if (!seq) {
+      sendJson(res, 400, { error: "missing required query param: 'seq'" });
+      return;
+    }
+    try {
+      const result = await rejectImage(getPool() as unknown as Queryable, client, seq);
+      sendJson(res, result.rejected ? 200 : 404, result);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
   }
 
   // Image enrichment: GET serves the button, POST runs a bounded batch (SerpAPI + Vision + attach).
