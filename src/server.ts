@@ -18,6 +18,7 @@ import { squareConfigFromEnv, listLocations } from './lib/square-client.js';
 import { previewInvoiceImport } from './jobs/import-preview.js';
 import { provisionCategories } from './jobs/provision-categories.js';
 import { runComparison } from './jobs/compare.js';
+import { runImport } from './jobs/import.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -164,6 +165,44 @@ async function run(){
 </script>
 </body></html>`;
 
+// Deliberate trigger to push an approved invoice into Square (reads ?invoice=<id>).
+const IMPORT_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Push to Square</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:2rem auto;max-width:680px;color:#1a1a1a;padding:0 1rem}
+  h2{margin:0 0 .5rem} p{color:#555}
+  .warn{background:#fff8e1;border:1px solid #f2d98a;border-radius:6px;padding:.6rem .8rem;font-size:14px;color:#7a5b00}
+  button{margin-top:1rem;padding:.6rem 1.2rem;border:1px solid #166534;background:#166534;color:#fff;border-radius:6px;cursor:pointer;font:inherit}
+  button:disabled{opacity:.5;cursor:default}
+  #status{margin-top:1rem;color:#333;min-height:1.2em}
+  pre{margin-top:1rem;background:#0f1729;color:#dbe4ff;padding:1rem;border-radius:8px;overflow:auto;font-size:12.5px;max-height:60vh}
+</style></head>
+<body>
+  <h2>Push invoice to Square</h2>
+  <p>Creates or restocks this approved invoice's items in the connected Square sandbox, receives inventory, and records the SKU&rarr;Square mapping.</p>
+  <div class="warn">This writes <strong>live</strong> to your Square sandbox.</div>
+  <button id="go" onclick="run()">Push to Square</button>
+  <div id="status"></div>
+  <pre id="out"></pre>
+<script>
+async function run(){
+  var invoice=new URLSearchParams(location.search).get('invoice');
+  var s=document.getElementById('status');
+  if(!invoice){ s.textContent='Add ?invoice=<id> to the URL first.'; return; }
+  if(!confirm('Push this invoice to the Square sandbox? Creates/restocks items + inventory.')) return;
+  var b=document.getElementById('go'), o=document.getElementById('out');
+  b.disabled=true; s.textContent='Pushing to Square…';
+  try{
+    var res=await fetch('/jobs/import/run?invoice='+encodeURIComponent(invoice)+'&client=RE',{method:'POST'});
+    var j=await res.json();
+    if(res.ok){ s.textContent='Done — '+j.itemsCreated+' items created, '+j.variationsAdded+' variations added, '+j.variationsRestocked+' restocked, '+j.inventoryAdjusted+' inventory changes.'; o.textContent=JSON.stringify(j,null,2); }
+    else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }
+  }catch(e){ s.textContent='Error: '+e.message; b.disabled=false; }
+}
+</script>
+</body></html>`;
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
@@ -228,6 +267,30 @@ const server = createServer(async (req, res) => {
       sendJson(res, 500, { error: (err as Error).message });
     }
     return;
+  }
+
+  // Push an approved invoice to Square: GET serves the button, POST runs it (live writes).
+  if (url.pathname === '/jobs/import/run') {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(IMPORT_PAGE);
+      return;
+    }
+    if (req.method === 'POST') {
+      const invoiceId = url.searchParams.get('invoice');
+      const client = url.searchParams.get('client') ?? 'RE';
+      if (!invoiceId) {
+        sendJson(res, 400, { error: "missing required query param: 'invoice'" });
+        return;
+      }
+      try {
+        const result = await runImport(getPool() as unknown as Queryable, client, invoiceId);
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { error: (err as Error).message });
+      }
+      return;
+    }
   }
 
   // A/B: GET /compare serves the page; POST /compare runs both pipelines and diffs them.

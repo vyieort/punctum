@@ -28,7 +28,7 @@ export async function loadCategoryMap(db: Queryable, clientId: string): Promise<
 }
 
 /** The stored classification for an invoice's PRODUCT lines (non-products excluded). */
-async function loadClassifiedProducts(db: Queryable, invoiceId: string): Promise<{ vendor: string; items: ClassifiedItem[] }> {
+export async function loadClassifiedProducts(db: Queryable, invoiceId: string): Promise<{ vendor: string; items: ClassifiedItem[] }> {
   const inv = await db.query(`select vendor from invoices where id = $1`, [invoiceId]);
   if (inv.rows.length === 0) throw new Error(`invoice ${invoiceId} not found`);
   const vendor = String((inv.rows[0] as { vendor: string | null }).vendor ?? '');
