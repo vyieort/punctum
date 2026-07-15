@@ -259,3 +259,27 @@ export async function runImport(
   ]);
   return result;
 }
+
+/**
+ * Re-run any invoice left in 'importing' — e.g. the server restarted while a background push was
+ * in flight (approve fires runImport fire-and-forget). Safe to repeat: runImport is idempotent via
+ * stable per-invoice keys. Call on boot.
+ */
+export async function recoverStuckImports(
+  db: Queryable,
+  runImportFn: (db: Queryable, invoiceId: string) => Promise<unknown> = (d, id) => runImport(d, id),
+): Promise<{ recovered: string[]; failed: string[] }> {
+  const { rows } = await db.query(`select id from invoices where status = 'importing' order by updated_at`);
+  const recovered: string[] = [];
+  const failed: string[] = [];
+  for (const r of rows) {
+    const id = String((r as { id: string }).id);
+    try {
+      await runImportFn(db, id);
+      recovered.push(id);
+    } catch {
+      failed.push(id);
+    }
+  }
+  return { recovered, failed };
+}
