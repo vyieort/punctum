@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import type { Queryable } from '../src/jobs/pg-rows.js';
-import { runImport, type SquareOps } from '../src/jobs/import.js';
+import { runImport, recoverStuckImports, type SquareOps } from '../src/jobs/import.js';
 
 const mig = (f: string): string => readFileSync(new URL(`../db/migrations/${f}`, import.meta.url), 'utf8');
 const INV = '00000000-0000-0000-0000-0000000000bb';
@@ -127,4 +127,36 @@ test('reorder via name-search fallback when the SKU is not yet mapped', async ()
   assert.equal(r.itemsCreated, 0);
   assert.equal(r.variationsRestocked, 1); // matched by variation name from the search result
   assert.equal(r.variationsAdded, 1);
+});
+
+test('recoverStuckImports re-runs every invoice left in importing', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  await db.exec(`insert into invoices (id, client_id, vendor, status) values
+    ('00000000-0000-0000-0000-0000000000c1','RE','BVLA','importing'),
+    ('00000000-0000-0000-0000-0000000000c2','RE','NeoMetal','importing')`);
+  const ran: string[] = [];
+  const r = await recoverStuckImports(q, async (_db, id) => {
+    ran.push(id);
+  });
+  assert.deepEqual(ran.sort(), ['00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-0000000000c2']);
+  assert.equal(r.recovered.length, 2);
+  assert.equal(r.failed.length, 0);
+});
+
+test('recoverStuckImports records a failure and keeps going', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  await db.exec(`insert into invoices (id, client_id, vendor, status) values
+    ('00000000-0000-0000-0000-0000000000c1','RE','BVLA','importing'),
+    ('00000000-0000-0000-0000-0000000000c2','RE','NeoMetal','importing')`);
+  let first = true;
+  const r = await recoverStuckImports(q, async () => {
+    if (first) {
+      first = false;
+      throw new Error('boom');
+    }
+  });
+  assert.equal(r.recovered.length, 1);
+  assert.equal(r.failed.length, 1);
 });

@@ -20,7 +20,7 @@ import { squareConfigFromEnv, listLocations } from './lib/square-client.js';
 import { previewInvoiceImport } from './jobs/import-preview.js';
 import { provisionCategories } from './jobs/provision-categories.js';
 import { runComparison } from './jobs/compare.js';
-import { runImport } from './jobs/import.js';
+import { runImport, recoverStuckImports } from './jobs/import.js';
 import { wipeSandboxCatalog } from './jobs/wipe.js';
 import { enrichImages } from './jobs/enrich-images.js';
 import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, clearVariationImage, setItemImageFromRow } from './review/catalog.js';
@@ -790,6 +790,12 @@ server.listen(PORT, () => {
     try {
       startWorker(getPool() as unknown as Queryable);
       console.log('batch worker started');
+      // Re-run any Square push orphaned by a restart mid-import (invoice stuck 'importing').
+      void recoverStuckImports(getPool() as unknown as Queryable)
+        .then((r) => {
+          if (r.recovered.length) console.log(`recovered ${r.recovered.length} stuck import(s)`);
+        })
+        .catch(() => {});
     } catch (err) {
       console.error('batch worker failed to start:', (err as Error).message);
     }
