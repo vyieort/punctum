@@ -30,9 +30,9 @@ import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, cl
 import { applyEdits, getEditPatterns, getCategoryPaths, clearEdits, type RowEdit } from './review/catalog-edit.js';
 import { renderPatternsPage } from './review/patterns-page.js';
 import { syncCategoryPaths } from './jobs/category-sync.js';
-import { passwordLogin } from './auth/gotrue.js';
-import { getUser, getSession, ACCESS_COOKIE, REFRESH_COOKIE } from './auth/session.js';
-import { resolveClientForUser } from './auth/tenant.js';
+import { passwordLogin, refreshSession } from './auth/gotrue.js';
+import { getUser, getSession, verifyAccessToken, ACCESS_COOKIE, REFRESH_COOKIE } from './auth/session.js';
+import { resolveClientForUser, parseCookies } from './auth/tenant.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -413,8 +413,11 @@ async function run(){
 </script>
 </body></html>`;
 
-// Home / links index — one bookmarkable page listing every Punctum page.
-const LINKS_PAGE = `<!doctype html>
+// Home / links index — one bookmarkable page listing every Punctum page. Rendered per-session so
+// the signed-in user + their tenant show up top, and this stays the living index as we build.
+const escHome = (s: string): string =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const renderHome = (sess: { email: string | null; clientId: string }): string => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Punctum</title>
 <style>
@@ -427,10 +430,13 @@ const LINKS_PAGE = `<!doctype html>
   a{color:#166534;font-weight:600;text-decoration:none;font-size:15px} a:hover{text-decoration:underline}
   .d{color:#555;font-size:13px;margin-top:2px}
   code{background:#f3f4f6;padding:.05rem .3rem;border-radius:4px;font-size:12px}
+  .userbar{display:flex;justify-content:space-between;align-items:center;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:.5rem .8rem;font-size:13px;color:#374151;margin-bottom:1.25rem}
+  .userbar a{color:#b91c1c;font-weight:600;font-size:13px}
 </style></head>
 <body>
+  <div class="userbar"><span>Signed in as <strong>${escHome(sess.email ?? 'you')}</strong> &middot; tenant <code>${escHome(sess.clientId)}</code></span><a href="/logout">Log out</a></div>
   <h1>Punctum</h1>
-  <p class="tag">Invoice &rarr; Square catalog automation &middot; Ritual Evolution (sandbox)</p>
+  <p class="tag">Invoice &rarr; Square catalog automation</p>
 
   <h2>Invoices</h2>
   <ul>
@@ -457,6 +463,12 @@ const LINKS_PAGE = `<!doctype html>
   <h2>Advanced</h2>
   <ul>
     <li><a href="/jobs/import/run">Manual import / retry</a><div class="d">Re-push an approved invoice to Square &mdash; needs <code>?invoice=&lt;id&gt;</code>.</div></li>
+  </ul>
+
+  <h2>Account</h2>
+  <ul>
+    <li><a href="/logout">Log out</a><div class="d">End your session and return to the sign-in page.</div></li>
+    <li><a href="/whoami">Session info</a><div class="d">Your user id and current tenant (JSON).</div></li>
   </ul>
 
   <h2 class="danger">Danger zone</h2>
@@ -570,11 +582,28 @@ const server = createServer(async (req, res) => {
   }
 
   // ---- Auth gate: everything below requires a signed-in session; scope is the user's tenant. ----
-  let session: Awaited<ReturnType<typeof getSession>> = null;
-  try {
-    session = await getSession(req, getPool() as unknown as Queryable);
-  } catch {
-    session = null;
+  const authDb = getPool() as unknown as Queryable;
+  let session: Awaited<ReturnType<typeof getSession>> = await getSession(req, authDb).catch(() => null);
+  // Access token expired but a refresh token is present -> silently rotate and set fresh cookies,
+  // so sessions don't drop every ~hour.
+  if (!session) {
+    const refresh = parseCookies(req.headers.cookie)[REFRESH_COOKIE];
+    if (refresh) {
+      try {
+        const t = await refreshSession(refresh);
+        const user = await verifyAccessToken(t.accessToken);
+        const clientId = user.userId ? await resolveClientForUser(authDb, user.userId) : null;
+        if (clientId) {
+          res.setHeader('set-cookie', [
+            `${ACCESS_COOKIE}=${t.accessToken}; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=${t.expiresIn}`,
+            `${REFRESH_COOKIE}=${t.refreshToken}; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=2592000`,
+          ]);
+          session = { user, clientId };
+        }
+      } catch {
+        /* refresh failed -> fall through to login */
+      }
+    }
   }
   if (!session) {
     if ((req.method ?? 'GET') === 'GET') {
@@ -614,7 +643,7 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/' && req.method === 'GET') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(LINKS_PAGE);
+    res.end(renderHome({ email: session.user.email, clientId: authedClient }));
     return;
   }
 
@@ -1005,6 +1034,20 @@ const server = createServer(async (req, res) => {
   const parts = url.pathname.split('/').filter(Boolean);
   if (parts[0] === 'invoices' && parts.length === 3) {
     const [, invoiceId, action] = parts;
+
+    // Tenant ownership guard: an invoice is only reachable by its own tenant (else 404, so a bad
+    // id or another studio's id looks identical). Invalid uuid -> caught -> 404.
+    let owned = false;
+    try {
+      const own = await authDb.query(`select 1 from invoices where id = $1 and client_id = $2`, [invoiceId, authedClient]);
+      owned = own.rows.length > 0;
+    } catch {
+      owned = false;
+    }
+    if (!owned) {
+      sendJson(res, 404, { error: 'not found' });
+      return;
+    }
 
     // Serve the stored source PDF for the review panel.
     if (action === 'pdf' && req.method === 'GET') {
