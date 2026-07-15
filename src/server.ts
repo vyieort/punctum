@@ -22,6 +22,8 @@ import { provisionCategories } from './jobs/provision-categories.js';
 import { runComparison } from './jobs/compare.js';
 import { runImport, recoverStuckImports } from './jobs/import.js';
 import { wipeSandboxCatalog } from './jobs/wipe.js';
+import { parseSquareLibraryXlsx } from './lib/library-import.js';
+import { seedLibrary } from './jobs/library-seed.js';
 import { enrichImages } from './jobs/enrich-images.js';
 import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, clearVariationImage, setItemImageFromRow } from './review/catalog.js';
 
@@ -142,6 +144,52 @@ async function up(){
   }
   s.innerHTML='Done — '+done+' queued and processing in the background. <a href="/queue">Open the review queue →</a>';
   b.disabled=false;
+}
+</script>
+</body></html>`;
+
+// Onboarding: a client uploads their current Square Item Library export (.xlsx). We parse it and
+// seed catalog_mapping so future invoices reorder-match the existing catalog. Client-agnostic.
+const LIBRARY_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Import existing library</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:3rem auto;max-width:640px;color:#1a1a1a;padding:0 1rem}
+  h2{margin:0 0 .5rem} p{color:#555}
+  ol{color:#555;font-size:14px;line-height:1.5}
+  .drop{border:1px dashed #bbb;border-radius:8px;padding:2rem;text-align:center;background:#fafafa}
+  button{margin-top:1rem;padding:.6rem 1.2rem;border:1px solid #166534;background:#166534;color:#fff;border-radius:6px;cursor:pointer;font:inherit}
+  button:disabled{opacity:.5;cursor:default}
+  #status{margin-top:1rem;color:#333;min-height:1.2em} a{color:#166534}
+  pre{margin-top:1rem;background:#0f1729;color:#dbe4ff;padding:1rem;border-radius:8px;overflow:auto;font-size:12.5px;max-height:50vh}
+</style></head>
+<body>
+  <h2>Import existing library</h2>
+  <p>Seed Punctum from your current Square catalog so future invoices restock the right items instead of creating duplicates.</p>
+  <ol>
+    <li>In Square: <strong>Items &amp; Orders &rarr; Items &rarr; Actions &rarr; Export Library</strong>.</li>
+    <li>Upload the <strong>.xlsx</strong> here. Items already in Square keep their catalog IDs; blank SKUs get a generated one.</li>
+  </ol>
+  <div class="drop">
+    <input type="file" id="f" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+    <div><button id="go" onclick="up()">Import library</button></div>
+  </div>
+  <div id="status"></div>
+  <pre id="out" hidden></pre>
+<script>
+async function up(){
+  var el=document.getElementById('f'), s=document.getElementById('status'), o=document.getElementById('out'), b=document.getElementById('go');
+  if(!el.files||!el.files[0]){ s.textContent='Pick your Square library .xlsx first.'; return; }
+  var f=el.files[0]; b.disabled=true; o.hidden=true; s.textContent='Reading '+f.name+' and seeding…';
+  try{
+    var buf=await f.arrayBuffer();
+    var res=await fetch('/library/import?filename='+encodeURIComponent(f.name)+'&client=RE',{method:'POST',headers:{'content-type':'application/octet-stream'},body:buf});
+    var j=await res.json();
+    if(res.ok){
+      s.innerHTML='Done — '+j.seeded+' items seeded ('+j.inserted+' new, '+j.updated+' updated); '+j.generatedSkus+' SKUs generated. <a href="/queue">Open the queue →</a>';
+      o.hidden=false; o.textContent=JSON.stringify(j,null,2);
+    } else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }
+  }catch(e){ s.textContent='Error: '+e.message; b.disabled=false; }
 }
 </script>
 </body></html>`;
@@ -376,6 +424,7 @@ const LINKS_PAGE = `<!doctype html>
 
   <h2>Setup &amp; checks</h2>
   <ul>
+    <li><a href="/library/import">Import existing library</a><div class="d">Seed Punctum from a Square library export so reorders restock instead of duplicating (run once per client).</div></li>
     <li><a href="/jobs/categories/provision">Provision categories</a><div class="d">Create the category tree in the Square sandbox (run once on an empty sandbox).</div></li>
     <li><a href="/square/verify">Square connection check</a><div class="d">Confirm the Square token + location reach the sandbox.</div></li>
     <li><a href="/compare">Compare pipelines (A/B)</a><div class="d">Diff two-pass vs one-pass extraction on a PDF &mdash; no writes.</div></li>
@@ -697,6 +746,33 @@ const server = createServer(async (req, res) => {
         filename,
       });
       sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  // Onboarding: GET serves the upload form; POST parses a Square library .xlsx and seeds mappings.
+  if (url.pathname === '/library/import' && req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(LIBRARY_PAGE);
+    return;
+  }
+  if (url.pathname === '/library/import' && req.method === 'POST') {
+    try {
+      const buf = await readBodyBuffer(req);
+      if (buf.length === 0) {
+        sendJson(res, 400, { error: 'empty upload' });
+        return;
+      }
+      const client = url.searchParams.get('client') ?? 'RE';
+      const rows = parseSquareLibraryXlsx(buf);
+      if (rows.length === 0) {
+        sendJson(res, 400, { error: 'no rows found — is this a Square Item Library export?' });
+        return;
+      }
+      const result = await seedLibrary(getPool() as unknown as Queryable, client, rows);
+      sendJson(res, 200, { parsed: rows.length, ...result });
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }
