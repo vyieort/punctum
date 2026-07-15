@@ -81,12 +81,10 @@ export function renderQueuePage(rows: QueueRow[]): string {
     .map((r) => {
       const color = STATUS_COLOR[r.status] ?? '#6b7280';
       const label = STATUS_LABEL[r.status] ?? r.status;
-      const action =
-        r.status === 'in_review'
-          ? `<a class="review" href="/invoices/${esc(r.id)}/review">Review →</a>`
-          : r.status === 'error'
-            ? `<a href="/invoices/${esc(r.id)}/review">Details</a>`
-            : '';
+      // Every row links to its (read-only) review page — so an already-pushed invoice can be
+      // reopened to look at, with no approve/reject at that point.
+      const linkLabel = r.status === 'in_review' ? 'Review →' : r.status === 'error' ? 'View error' : 'View';
+      const action = `<a class="review" href="/invoices/${esc(r.id)}/review">${linkLabel}</a>`;
       const total = r.total ? `$${esc(r.total)}` : '';
       return `<tr>
         <td>${esc(r.created)}<div class="fn">${esc(r.filename)}</div></td>

@@ -185,12 +185,17 @@ export async function runImport(
     locationId = locationId ?? cfg.locationId;
   }
   if (!locationId) throw new Error('runImport: no Square location id');
-  const occurredAt = opts.occurredAt ?? new Date().toISOString();
 
-  const inv = await db.query(`select client_id, vendor from invoices where id = $1`, [invoiceId]);
+  const inv = await db.query(`select client_id, vendor, created_at from invoices where id = $1`, [invoiceId]);
   if (inv.rows.length === 0) throw new Error(`invoice ${invoiceId} not found`);
   const clientId = String((inv.rows[0] as { client_id: string }).client_id);
   const vendor = String((inv.rows[0] as { vendor: string | null }).vendor ?? '');
+  // Inventory occurred_at must be DETERMINISTIC per invoice: the inventory idempotency key is
+  // stable (invoice+sku), so a retry has to send identical data or Square rejects it with
+  // IDEMPOTENCY_KEY_REUSED. Deriving it from the invoice's created_at (not new Date()) makes a
+  // retry an idempotent no-op instead of an error.
+  const createdAt = (inv.rows[0] as { created_at: string | Date }).created_at;
+  const occurredAt = opts.occurredAt ?? new Date(createdAt as string).toISOString();
 
   const [{ items }, pricingRules, categoryMap] = await Promise.all([
     loadClassifiedProducts(db, invoiceId),
@@ -301,9 +306,13 @@ export async function runImport(
     }
   }
 
-  await db.query(`update invoices set status = $2, updated_at = now() where id = $1`, [
+  // Persist the failure reason so the review page can show exactly what Square rejected (cleared
+  // on success). The background approve->import path otherwise discards result.errors.
+  const errorDetail = result.errors.length ? JSON.stringify(result.errors) : null;
+  await db.query(`update invoices set status = $2, error_detail = $3, updated_at = now() where id = $1`, [
     invoiceId,
     result.errors.length ? 'error' : 'done',
+    errorDetail,
   ]);
   return result;
 }

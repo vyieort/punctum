@@ -47,6 +47,9 @@ async function insertClassifiedLines(
   merged: MergedInvoice,
 ): Promise<{ lineCount: number; productCount: number }> {
   const lines = (fillSkus(merged.vendor_name, merged.items) as unknown as ClassifiedItem[]).map(normalizeClassification);
+  // Idempotent (re)extract: clear any prior lines first, so re-processing an invoice (worker
+  // recovery, retry, re-queue) replaces its lines instead of appending duplicates.
+  await db.query(`delete from invoice_lines where invoice_id = $1`, [invoiceId]);
   let lineNo = 0;
   for (const p of lines) {
     lineNo++;

@@ -12,6 +12,20 @@ function esc(v: unknown): string {
     .replace(/"/g, '&quot;');
 }
 
+// Render the persisted push failure (JSON [{item, error}]) as a readable list.
+function formatPushError(detail: string | null): string {
+  if (!detail) return '';
+  let items: Array<{ item?: string; error?: string }>;
+  try {
+    items = JSON.parse(detail) as Array<{ item?: string; error?: string }>;
+  } catch {
+    return `<pre style="white-space:pre-wrap;background:#fef2f2;border:1px solid #f3b4b4;border-radius:6px;padding:.5rem .7rem;color:#991b1b;font-size:12px;overflow:auto">${esc(detail)}</pre>`;
+  }
+  if (!Array.isArray(items) || items.length === 0) return '';
+  const rows = items.map((e) => `<li><strong>${esc(e.item ?? 'item')}</strong>: ${esc(e.error ?? '')}</li>`).join('');
+  return `<ul style="margin:.4rem 0 0;padding-left:1.1rem;color:#991b1b;font-size:13px;line-height:1.4">${rows}</ul>`;
+}
+
 export function renderReviewPage(data: InvoiceForReview): string {
   const { invoice, lines } = data;
   const status = invoice.status;
@@ -75,6 +89,7 @@ ${status === 'importing' ? '<meta http-equiv="refresh" content="4">' : ''}
   .note{color:#666;font-size:13px;margin-top:.5rem;max-width:640px}
 </style></head>
 <body>
+  <p style="margin:0 0 .5rem"><a href="/queue" style="color:#2563eb;font-size:13px;text-decoration:none">&larr; Back to queue</a></p>
   <h2>${esc(invoice.vendor)} &mdash; ${esc(invoice.invoice_number)}</h2>
   <div class="meta">${esc(invoice.invoice_date)} &middot; Total $${esc(invoice.total)} &middot;
     <span class="status${statusClass}">${esc(status)}</span></div>
@@ -101,7 +116,7 @@ ${status === 'importing' ? '<meta http-equiv="refresh" content="4">' : ''}
         status === 'error'
           ? lines.length === 0
             ? '<p>&#9888; Couldn&rsquo;t extract this invoice &mdash; retry it from the queue.</p>'
-            : '<p>&#9888; Approved, but the Square push failed &mdash; retry from the import page.</p>'
+            : `<p>&#9888; Approved, but the Square push failed. Fix at the source, then retry from the import page.</p>${formatPushError(invoice.error_detail)}`
           : ''
       }
       ${status === 'needs_review' ? '<p>&#8617; Sent back for re-parse.</p>' : ''}

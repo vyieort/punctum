@@ -20,6 +20,7 @@ async function seeded(): Promise<PGlite> {
   await db.exec(mig('0006_status_queued.sql'));
   await db.exec(mig('0007_status_processing.sql'));
   await db.exec(mig('0008_invoice_queue_cols.sql'));
+  await db.exec(mig('0010_invoice_error_detail.sql'));
   await db.exec(`insert into clients (id,name) values ('RE','Ritual Evolution')`);
   await db.exec(`insert into invoices (id, client_id, vendor, invoice_number, invoice_date, total, status)
     values ('${INV}','RE','BVLA','INV-DEMO-001','2026-07-11',412.50,'in_review')`);

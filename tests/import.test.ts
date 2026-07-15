@@ -19,6 +19,7 @@ async function seeded(): Promise<PGlite> {
   await db.exec(mig('0002_invoice_needs_review.sql'));
   await db.exec(mig('0003_line_classification.sql'));
   await db.exec(mig('0009_catalog_edits.sql'));
+  await db.exec(mig('0010_invoice_error_detail.sql'));
   await db.exec(`insert into clients (id,name) values ('RE','Ritual Evolution')`);
   await db.exec(
     `insert into client_config (client_id, pricing_rules) values ('RE',
@@ -145,6 +146,34 @@ test('reorder matches a library-seeded item by NAME when the SKU differs (no dup
   assert.equal(r.variationsRestocked, 1); // white opal restocked onto the library variation
   assert.equal(r.variationsAdded, 1); // champagne added as a new variation to that item
   assert.ok(inventory.some((i) => i.catalog_object_id === 'LIBVAR1'));
+});
+
+test('inventory occurred_at is derived from the invoice (deterministic, retry-safe)', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  const occ: string[] = [];
+  const base = fakeOps({});
+  const ops = { ...base.ops, inventory: async (body: unknown) => { occ.push((body as { changes: Array<{ adjustment: { occurred_at: string } }> }).changes[0]!.adjustment.occurred_at); return {}; } };
+  await runImport(q, INV, { ops, locationId: 'LOC' }); // no occurredAt -> must derive from created_at
+  assert.ok(occ.length >= 2);
+  assert.equal(new Set(occ).size, 1); // every adjustment shares one timestamp -> a retry sends identical data
+  const created = (await db.query<{ c: string }>(`select created_at::text as c from invoices where id=$1`, [INV])).rows[0]!.c;
+  assert.equal(new Date(occ[0]!).toISOString(), new Date(created).toISOString());
+});
+
+test('a failed push persists error_detail on the invoice (so the review page can show it)', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  const { ops } = fakeOps({});
+  ops.upsert = async () => { throw new Error('INVALID_REQUEST_ERROR: duplicate SKU'); };
+  const r = await runImport(q, INV, { ops, locationId: 'LOC', occurredAt: '2026-07-13T00:00:00.000Z' });
+
+  assert.ok(r.errors.length > 0);
+  const inv = await db.query<{ status: string; error_detail: string | null }>(`select status, error_detail from invoices where id = $1`, [INV]);
+  assert.equal(inv.rows[0]!.status, 'error');
+  const detail = JSON.parse(inv.rows[0]!.error_detail ?? '[]') as Array<{ item: string; error: string }>;
+  assert.ok(detail.length > 0);
+  assert.match(detail[0]!.error, /duplicate SKU/);
 });
 
 test('recoverStuckImports re-runs every invoice left in importing', async () => {
