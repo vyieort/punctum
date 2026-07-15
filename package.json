@@ -15,6 +15,7 @@
     "migrate": "node --import tsx scripts/migrate.ts"
   },
   "dependencies": {
+    "jose": "^5.9.6",
     "pg": "^8.11.0",
     "tsx": "^4.19.0",
     "xlsx": "^0.18.5"

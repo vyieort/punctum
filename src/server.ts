@@ -30,6 +30,9 @@ import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, cl
 import { applyEdits, getEditPatterns, getCategoryPaths, clearEdits, type RowEdit } from './review/catalog-edit.js';
 import { renderPatternsPage } from './review/patterns-page.js';
 import { syncCategoryPaths } from './jobs/category-sync.js';
+import { passwordLogin } from './auth/gotrue.js';
+import { getUser, ACCESS_COOKIE, REFRESH_COOKIE } from './auth/session.js';
+import { resolveClientForUser } from './auth/tenant.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -462,11 +465,107 @@ const LINKS_PAGE = `<!doctype html>
   </ul>
 </body></html>`;
 
+const LOGIN_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in &middot; Punctum</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f8fafc;color:#1a1a1a}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:2rem;width:320px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  h1{margin:0 0 .25rem;font-size:22px} p{color:#6b7280;font-size:13px;margin:0 0 1.25rem}
+  label{display:block;font-size:13px;color:#374151;margin:.6rem 0 .2rem}
+  input{width:100%;box-sizing:border-box;font:inherit;padding:.5rem .6rem;border:1px solid #d1d5db;border-radius:6px}
+  button{width:100%;margin-top:1rem;padding:.6rem;border:1px solid #166534;background:#166534;color:#fff;border-radius:6px;cursor:pointer;font:inherit}
+  button:disabled{opacity:.5}
+  #err{color:#b91c1c;font-size:13px;min-height:1.2em;margin-top:.6rem}
+</style></head>
+<body>
+  <form class="card" onsubmit="return signin(event)">
+    <h1>Punctum</h1>
+    <p>Sign in to your studio.</p>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" required>
+    <label for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="current-password" required>
+    <button id="go" type="submit">Sign in</button>
+    <div id="err"></div>
+  </form>
+<script>
+async function signin(e){
+  e.preventDefault();
+  var b=document.getElementById('go'), err=document.getElementById('err');
+  b.disabled=true; err.textContent='';
+  try{
+    var res=await fetch('/login',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('pw').value})});
+    var j=await res.json();
+    if(res.ok){ location.href='/'; } else { err.textContent=j.error||'Sign in failed'; b.disabled=false; }
+  }catch(ex){ err.textContent=ex.message; b.disabled=false; }
+  return false;
+}
+</script>
+</body></html>`;
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
   if (url.pathname === '/health') {
     sendJson(res, 200, { status: 'ok', service: 'punctum' });
+    return;
+  }
+
+  // --- Auth (Supabase). Login/logout are public; other routes get session-gated in a later step. ---
+  if (url.pathname === '/login' && req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(LOGIN_PAGE);
+    return;
+  }
+  if (url.pathname === '/login' && req.method === 'POST') {
+    try {
+      const raw = await readBodyBuffer(req);
+      const { email, password } = JSON.parse(raw.toString('utf8') || '{}') as { email?: string; password?: string };
+      if (!email || !password) {
+        sendJson(res, 400, { error: 'email and password required' });
+        return;
+      }
+      const t = await passwordLogin(email, password);
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'set-cookie': [
+          `${ACCESS_COOKIE}=${t.accessToken}; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=${t.expiresIn}`,
+          `${REFRESH_COOKIE}=${t.refreshToken}; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=2592000`,
+        ],
+      });
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      sendJson(res, 401, { error: (err as Error).message });
+    }
+    return;
+  }
+  if (url.pathname === '/logout') {
+    res.writeHead(302, {
+      location: '/login',
+      'set-cookie': [
+        `${ACCESS_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=0`,
+        `${REFRESH_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=0`,
+      ],
+    });
+    res.end();
+    return;
+  }
+  // Who am I: verify the session cookie and show the user id + resolved tenant (or null). Handy for
+  // seeding the first client_members row (grab your user id here after signing in).
+  if (url.pathname === '/whoami' && req.method === 'GET') {
+    try {
+      const user = await getUser(req);
+      if (!user) {
+        sendJson(res, 200, { authenticated: false });
+        return;
+      }
+      const clientId = await resolveClientForUser(getPool() as unknown as Queryable, user.userId);
+      sendJson(res, 200, { authenticated: true, userId: user.userId, email: user.email, clientId });
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
     return;
   }
 
