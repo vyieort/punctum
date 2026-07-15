@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import type { Queryable } from '../src/jobs/pg-rows.js';
-import { applyEdits, getEditPatterns, nameDiverges, type EditPushOps } from '../src/review/catalog-edit.js';
+import { applyEdits, getEditPatterns, clearEdits, nameDiverges, type EditPushOps } from '../src/review/catalog-edit.js';
 
 const mig = (f: string): string => readFileSync(new URL(`../db/migrations/${f}`, import.meta.url), 'utf8');
 
@@ -109,4 +109,12 @@ test('getEditPatterns surfaces recurring category moves + name deviations', asyn
   assert.equal(rep.categoryCandidates[0]!.count, 2);
   assert.equal(rep.recentNameDeviations.length, 1);
   assert.equal(rep.nameOverridesByVendor[0]!.vendor, 'NeoMetal');
+});
+
+test('clearEdits wipes the correction log for the client', async () => {
+  const db = await seeded();
+  await db.exec(`insert into catalog_edits (client_id, field, old_value, new_value) values ('RE','category','a','b'), ('RE','item_name','x','y')`);
+  const r = await clearEdits(db as unknown as Queryable, 'RE');
+  assert.equal(r.cleared, 2);
+  assert.equal((await db.query<{ n: number }>(`select count(*)::int as n from catalog_edits`)).rows[0]!.n, 0);
 });

@@ -197,6 +197,16 @@ export async function applyEdits(
   return result;
 }
 
+/**
+ * Wipe the correction log for a client. The log is advisory — it never auto-changes import logic,
+ * it just feeds the patterns report — so clearing it after a testing session removes noisy/test
+ * edits without any lasting effect. (The sandbox wipe clears it too.)
+ */
+export async function clearEdits(db: Queryable, clientId: string): Promise<{ cleared: number }> {
+  const r = await db.query(`delete from catalog_edits where client_id = $1 returning id`, [clientId]);
+  return { cleared: r.rows.length };
+}
+
 /** Distinct category paths (for the grid's category dropdown), sorted. */
 export async function getCategoryPaths(db: Queryable, clientId: string): Promise<string[]> {
   const map = await loadCategoryMap(db, clientId);

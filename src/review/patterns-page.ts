@@ -63,11 +63,26 @@ export function renderPatternsPage(r: EditPatternsReport): string {
   .vendorlist{margin:.25rem 0;color:#374151;font-size:14px} .devtable{margin-top:.75rem}
   code{background:#f3f4f6;padding:.05rem .3rem;border-radius:4px;font-size:12px}
   .back{font-size:13px}
+  #clearlog{font:inherit;font-size:12px;padding:.3rem .7rem;border:1px solid #b45309;color:#b45309;background:#fff;border-radius:6px;cursor:pointer}
+  #clearlog:disabled{opacity:.5;cursor:default}
 </style></head>
 <body>
   <a class="back" href="/catalog">← Back to catalog</a>
   <h2>Corrections &amp; patterns</h2>
-  <p class="sub">${r.totalEdits} edit${r.totalEdits === 1 ? '' : 's'} logged${byField ? ' — ' + esc(byField) : ''}. This turns hand-edits into import-rule improvements, so the same fix isn't needed on every invoice.</p>
+  <p class="sub">${r.totalEdits} edit${r.totalEdits === 1 ? '' : 's'} logged${byField ? ' — ' + esc(byField) : ''}. This turns hand-edits into import-rule improvements, so the same fix isn't needed on every invoice. It's advisory — nothing here changes the importer automatically.</p>
+  <p><button id="clearlog">Clear log</button> <span id="clearstatus" class="dim"></span></p>
+  <script>
+  document.getElementById('clearlog').addEventListener('click', async function(){
+    if(!confirm('Clear the correction log? Use this to discard test edits. It does not change anything in Square.')) return;
+    var b=this, s=document.getElementById('clearstatus'); b.disabled=true; s.textContent='Clearing…';
+    try{
+      var res=await fetch('/catalog/edits/clear?client=RE',{method:'POST'});
+      var j=await res.json();
+      if(res.ok){ s.textContent='Cleared '+j.cleared+' — reloading…'; setTimeout(function(){ location.reload(); }, 500); }
+      else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }
+    }catch(e){ s.textContent='Error: '+e.message; b.disabled=false; }
+  });
+  </script>
 
   <h3>Category fix candidates</h3>
   ${catSection}

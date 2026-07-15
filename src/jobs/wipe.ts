@@ -55,6 +55,8 @@ export async function wipeSandboxCatalog(
   const itemsDeleted = ids.length ? await ops.deleteItems(ids) : 0;
 
   const del = await db.query(`delete from catalog_mapping where client_id = $1 returning id`, [clientId]);
+  // Reset the correction log too, so test-run edits don't linger in the patterns report.
+  await db.query(`delete from catalog_edits where client_id = $1`, [clientId]);
 
   // Clear the invoice queue too for a true clean slate (sandbox-only; invoice_lines cascade).
   let invoicesCleared = 0;

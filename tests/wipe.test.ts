@@ -12,6 +12,7 @@ const mig = (f: string): string => readFileSync(new URL(`../db/migrations/${f}`,
 async function seeded(): Promise<PGlite> {
   const db = new PGlite();
   await db.exec(mig('0001_init.sql'));
+  await db.exec(mig('0009_catalog_edits.sql'));
   await db.exec(`insert into clients (id,name) values ('RE','Ritual Evolution')`);
   await db.exec(`insert into catalog_mapping (client_id, vendor, vendor_sku, square_item_id, square_variation_id, item_name, variation_name, status)
     values ('RE','BVLA','SKU-1','I1','V1','Ring','Y14K','PENDING'),

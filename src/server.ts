@@ -27,8 +27,9 @@ import { seedLibrary } from './jobs/library-seed.js';
 import { syncLibraryItemIds } from './jobs/library-sync.js';
 import { enrichImages } from './jobs/enrich-images.js';
 import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, clearVariationImage, setItemImageFromRow } from './review/catalog.js';
-import { applyEdits, getEditPatterns, getCategoryPaths, type RowEdit } from './review/catalog-edit.js';
+import { applyEdits, getEditPatterns, getCategoryPaths, clearEdits, type RowEdit } from './review/catalog-edit.js';
 import { renderPatternsPage } from './review/patterns-page.js';
+import { syncCategoryPaths } from './jobs/category-sync.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -560,6 +561,26 @@ const server = createServer(async (req, res) => {
       const report = await getEditPatterns(getPool() as unknown as Queryable, client);
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(renderPatternsPage(report));
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+  // Backfill category_path from the live Square catalog (populate the grid's category defaults).
+  if (url.pathname === '/catalog/sync-categories' && req.method === 'POST') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    try {
+      sendJson(res, 200, await syncCategoryPaths(getPool() as unknown as Queryable, client));
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+  // Reset the correction log (advisory only — clears test edits from the patterns report).
+  if (url.pathname === '/catalog/edits/clear' && req.method === 'POST') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    try {
+      sendJson(res, 200, await clearEdits(getPool() as unknown as Queryable, client));
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }

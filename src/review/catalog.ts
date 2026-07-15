@@ -177,7 +177,8 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   #dirtycount{color:#6b7280}
   #bulkapply,#pushbtn{font:inherit;font-size:12px;padding:.35rem .7rem;border-radius:6px;cursor:pointer;border:1px solid #166534;background:#166534;color:#fff}
   #bulkapply{border-color:#2563eb;background:#2563eb}
-  #bulkapply:disabled,#pushbtn:disabled{opacity:.45;cursor:default}
+  #synccat{border-color:#6b7280;background:#fff;color:#374151}
+  #bulkapply:disabled,#pushbtn:disabled,#synccat:disabled{opacity:.45;cursor:default}
   .patlink{color:#2563eb;font-size:12px}
   #pushstatus{color:#374151;font-size:12px}
   .chkcell{width:28px}
@@ -204,6 +205,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   <div id="editbar">
     <select id="bulkcat">${bulkCatOptions}</select>
     <button id="bulkapply" disabled>Set on selected (0)</button>
+    <button id="synccat" title="Fill the category column from the live Square catalog">Sync categories</button>
     <span class="sep"></span>
     <span id="dirtycount">No changes</span>
     <button id="pushbtn" disabled>Push changes to Square</button>
@@ -351,6 +353,30 @@ document.getElementById('pushbtn').addEventListener('click', async function(){
   }catch(e){ st.textContent='Error: '+e.message; btn.disabled=false; }
 });
 document.querySelectorAll('.ename').forEach(function(el){ refreshRow(el.closest('tr')); });
+
+// Arrow Up/Down move between rows in the same column (and stop a <select> from opening its overlay).
+document.querySelectorAll('.edit').forEach(function(el){
+  el.addEventListener('keydown', function(ev){
+    if(ev.key!=='ArrowDown' && ev.key!=='ArrowUp') return;
+    ev.preventDefault();
+    var tr=el.closest('tr');
+    var next = ev.key==='ArrowDown' ? tr.nextElementSibling : tr.previousElementSibling;
+    var target = next ? next.querySelector('[data-field="'+el.getAttribute('data-field')+'"]') : null;
+    if(target){ target.focus(); if(target.select){ try{ target.select(); }catch(e){} } }
+  });
+});
+
+// Fill the category column from Square, then reload to show it.
+var sc=document.getElementById('synccat');
+if(sc) sc.addEventListener('click', async function(){
+  sc.disabled=true; var st=document.getElementById('pushstatus'); st.textContent='Reading categories from Square…';
+  try{
+    var res=await fetch('/catalog/sync-categories?client=RE',{method:'POST'});
+    var j=await res.json();
+    if(res.ok){ st.textContent='Synced '+j.updated+' row(s) from '+j.matched+' item(s) — reloading…'; setTimeout(function(){ location.reload(); }, 700); }
+    else { st.textContent='Error: '+(j.error||res.status); sc.disabled=false; }
+  }catch(e){ st.textContent='Error: '+e.message; sc.disabled=false; }
+});
 </script>
 </body></html>`;
 }
