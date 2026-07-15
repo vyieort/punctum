@@ -27,6 +27,8 @@ import { seedLibrary } from './jobs/library-seed.js';
 import { syncLibraryItemIds } from './jobs/library-sync.js';
 import { enrichImages } from './jobs/enrich-images.js';
 import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, clearVariationImage, setItemImageFromRow } from './review/catalog.js';
+import { applyEdits, getEditPatterns, getCategoryPaths, type RowEdit } from './review/catalog-edit.js';
+import { renderPatternsPage } from './review/patterns-page.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -435,7 +437,8 @@ const LINKS_PAGE = `<!doctype html>
 
   <h2>Catalog &amp; images</h2>
   <ul>
-    <li><a href="/catalog">Catalog review</a><div class="d">Every variation with its matched image &mdash; preview, review alternatives, set the item image.</div></li>
+    <li><a href="/catalog">Catalog review &amp; edit</a><div class="d">Every variation &mdash; preview/replace images, and inline-edit name, price, category &amp; description, then push to Square.</div></li>
+    <li><a href="/catalog/edits">Corrections &amp; patterns</a><div class="d">Recurring hand-edits surfaced as import-rule fixes (so the same fix isn't needed every invoice).</div></li>
     <li><a href="/jobs/images/run">Enrich images</a><div class="d">Find &amp; attach product photos to newly imported items (SerpAPI + Vision).</div></li>
   </ul>
 
@@ -541,9 +544,36 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/catalog' && req.method === 'GET') {
     const client = url.searchParams.get('client') ?? 'RE';
     try {
-      const rows = await getCatalogRows(getPool() as unknown as Queryable, client);
+      const pool = getPool() as unknown as Queryable;
+      const [rows, categoryPaths] = await Promise.all([getCatalogRows(pool, client), getCategoryPaths(pool, client)]);
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(renderCatalogPage(rows));
+      res.end(renderCatalogPage(rows, categoryPaths));
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+  // Learning-loop report: recurring corrections that point at import-rule fixes.
+  if (url.pathname === '/catalog/edits' && req.method === 'GET') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    try {
+      const report = await getEditPatterns(getPool() as unknown as Queryable, client);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(renderPatternsPage(report));
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+  // Batch item edits: push changed fields to Square, log corrections, update the mapping.
+  if (url.pathname === '/catalog/edits' && req.method === 'POST') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    try {
+      const raw = await readBodyBuffer(req);
+      const parsed = JSON.parse(raw.toString('utf8') || '{}') as { edits?: RowEdit[] };
+      const edits = Array.isArray(parsed.edits) ? parsed.edits : [];
+      const result = await applyEdits(getPool() as unknown as Queryable, client, edits);
+      sendJson(res, 200, result);
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }

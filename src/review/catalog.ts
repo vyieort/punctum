@@ -25,6 +25,8 @@ export interface CatalogRow {
   status: string;
   wholesalePrice: string;
   retailPrice: string;
+  categoryPath: string;
+  description: string;
   imageUrl: string;
   hasCandidates: boolean;
   squareItemId: string;
@@ -36,6 +38,7 @@ export async function getCatalogRows(db: Queryable, clientId: string, limit = 10
   const { rows } = await db.query(
     `select seq, vendor, vendor_sku, square_item_id, item_name, variation_name, tags,
             status::text as status, wholesale_price::text as wholesale_price, retail_price::text as retail_price,
+            coalesce(category_path, '') as category_path, coalesce(item_description, '') as item_description,
             image_url, coalesce(image_candidates, '') <> '' as has_candidates
        from catalog_mapping
       where client_id = $1 and coalesce(square_variation_id, '') <> ''
@@ -56,6 +59,8 @@ export async function getCatalogRows(db: Queryable, clientId: string, limit = 10
       status: str(row.status),
       wholesalePrice: str(row.wholesale_price),
       retailPrice: str(row.retail_price),
+      categoryPath: str(row.category_path),
+      description: str(row.item_description),
       imageUrl: str(row.image_url),
       hasCandidates: row.has_candidates === true,
       squareItemId: str(row.square_item_id),
@@ -74,7 +79,7 @@ const STATUS_COLOR: Record<string, string> = {
   NEEDS_REVIEW: '#b91c1c',
 };
 
-export function renderCatalogPage(rows: CatalogRow[]): string {
+export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = []): string {
   const counts = rows.reduce<Record<string, number>>((acc, r) => {
     acc[r.status] = (acc[r.status] ?? 0) + 1;
     return acc;
@@ -82,6 +87,15 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
   const countLine = Object.entries(counts)
     .map(([s, n]) => `${n} ${s}`)
     .join(' · ');
+
+  const catOptions = (sel: string): string => {
+    const inList = categoryPaths.includes(sel);
+    const opts = [`<option value=""${sel === '' ? ' selected' : ''}>—</option>`];
+    if (sel && !inList) opts.push(`<option value="${esc(sel)}" selected>${esc(sel)}</option>`);
+    for (const p of categoryPaths) opts.push(`<option value="${esc(p)}"${p === sel ? ' selected' : ''}>${esc(p)}</option>`);
+    return opts.join('');
+  };
+  const bulkCatOptions = ['<option value="">Bulk category…</option>', ...categoryPaths.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`)].join('');
 
   const body = rows
     .map((r) => {
@@ -97,20 +111,26 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
         ? `<a href="${esc(r.imageUrl)}" target="_blank" rel="noreferrer" class="url">${esc(r.imageUrl)}</a>`
         : '';
       const wholesale = r.wholesalePrice ? `$${esc(r.wholesalePrice)}` : '';
-      const retail = r.retailPrice ? `$${esc(r.retailPrice)}` : '';
       const alts = r.hasCandidates
         ? `<button class="alts" data-seq="${esc(r.seq)}" data-cap="${esc(caption)}">Review alternatives</button>`
         : '';
       return `<tr id="row-${esc(r.seq)}">
+        <td class="chkcell"><input type="checkbox" class="rowchk" data-seq="${esc(r.seq)}"></td>
         <td class="showcell">${thumb}${useItem}</td>
-        <td><div class="item">${esc(r.itemName)}</div>${r.tags ? `<div class="tags">${esc(r.tags)}</div>` : ''}</td>
+        <td class="editcell">
+          <input class="ename edit" data-seq="${esc(r.seq)}" data-field="itemName" data-orig="${esc(r.itemName)}" data-canon="${esc(r.itemName)}" value="${esc(r.itemName)}">
+          <span class="warn" title="Off the naming convention — logged for review">&#9888;</span>
+          <div class="canon">convention: ${esc(r.itemName) || '—'}</div>
+          <input class="edesc edit" data-seq="${esc(r.seq)}" data-field="description" data-orig="${esc(r.description)}" value="${esc(r.description)}" placeholder="description…">
+          ${r.tags ? `<div class="tags">${esc(r.tags)}</div>` : ''}
+        </td>
         <td>${esc(r.variationName)}</td>
+        <td><select class="ecat edit" data-seq="${esc(r.seq)}" data-field="categoryPath" data-orig="${esc(r.categoryPath)}">${catOptions(r.categoryPath)}</select></td>
         <td>${esc(r.vendor)}</td>
         <td class="mono">${esc(r.vendorSku)}</td>
         <td class="wcell">${wholesale}</td>
-        <td>${retail}</td>
+        <td><input class="eprice edit" data-seq="${esc(r.seq)}" data-field="retailPrice" data-orig="${esc(r.retailPrice)}" value="${esc(r.retailPrice)}" inputmode="decimal"></td>
         <td><span class="badge" style="background:${color}">${esc(r.status)}</span></td>
-        <td class="url-td">${urlCell}</td>
         <td>${alts}</td>
       </tr>`;
     })
@@ -150,6 +170,27 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
   .alts{font:inherit;font-size:12px;padding:.25rem .6rem;border:1px solid #2563eb;color:#2563eb;background:#fff;border-radius:6px;cursor:pointer;white-space:nowrap}
   .alts:disabled{opacity:.6;cursor:default}
   tr.active{background:#f0fdf4} tr.active .thumb{outline:2px solid #166534}
+  #editbar{position:sticky;top:0;z-index:6;background:#fff;border-bottom:1px solid #e5e7eb;padding:.5rem 0;margin-bottom:.25rem;
+    display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-size:13px}
+  #editbar select{font:inherit;font-size:12px;padding:.25rem;max-width:260px}
+  #editbar .sep{flex:1}
+  #dirtycount{color:#6b7280}
+  #bulkapply,#pushbtn{font:inherit;font-size:12px;padding:.35rem .7rem;border-radius:6px;cursor:pointer;border:1px solid #166534;background:#166534;color:#fff}
+  #bulkapply{border-color:#2563eb;background:#2563eb}
+  #bulkapply:disabled,#pushbtn:disabled{opacity:.45;cursor:default}
+  .patlink{color:#2563eb;font-size:12px}
+  #pushstatus{color:#374151;font-size:12px}
+  .chkcell{width:28px}
+  .editcell{min-width:230px}
+  input.edit,select.edit{font:inherit;font-size:12px;padding:.2rem .3rem;border:1px solid #d1d5db;border-radius:4px;width:100%;box-sizing:border-box}
+  input.ename{font-weight:600}
+  input.eprice{width:74px}
+  .edesc{margin-top:3px;color:#374151}
+  tr.dirty{background:#fffbeb} tr.dirty td{border-bottom-color:#fde68a}
+  input.dirty,select.dirty{border-color:#d97706;background:#fffbeb}
+  .canon{color:#9ca3af;font-size:10px;margin:2px 0;display:none}
+  .warn{color:#b45309;display:none;font-size:12px;margin-left:2px}
+  tr.diverged .warn{display:inline} tr.diverged .canon{display:block}
 </style></head>
 <body>
   <h2>Catalog review</h2>
@@ -160,8 +201,17 @@ export function renderCatalogPage(rows: CatalogRow[]): string {
     <div id="gallery"></div>
     <div class="pvmeta"><span id="pvcap"></span><a id="pvlink" href="#" target="_blank" rel="noreferrer" style="display:none">open full size ↗</a></div>
   </div>
+  <div id="editbar">
+    <select id="bulkcat">${bulkCatOptions}</select>
+    <button id="bulkapply" disabled>Set on selected (0)</button>
+    <span class="sep"></span>
+    <span id="dirtycount">No changes</span>
+    <button id="pushbtn" disabled>Push changes to Square</button>
+    <a class="patlink" href="/catalog/edits">Corrections &amp; patterns →</a>
+    <span id="pushstatus"></span>
+  </div>
   <table>
-    <thead><tr><th></th><th>Item</th><th>Variation</th><th>Vendor</th><th>SKU</th><th>Wholesale</th><th>Retail</th><th>Status</th><th>Image URL</th><th></th></tr></thead>
+    <thead><tr><th><input type="checkbox" id="chkall"></th><th></th><th>Item &amp; description</th><th>Variation</th><th>Category</th><th>Vendor</th><th>SKU</th><th>Wholesale</th><th>Retail</th><th>Status</th><th></th></tr></thead>
     <tbody>${body}</tbody>
   </table>
 <script>
@@ -237,6 +287,70 @@ async function clearImg(){
     } else alert('Error '+res.status);
   }catch(e){ alert(e.message); }
 }
+
+// --- Batch editing: dirty tracking, divergence flag, bulk category, push ---
+function alnum(s){ return (s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+function fieldDirty(el){ return el.value !== el.getAttribute('data-orig'); }
+function refreshRow(tr){
+  var dirty=false;
+  tr.querySelectorAll('.edit').forEach(function(el){ var d=fieldDirty(el); el.classList.toggle('dirty', d); if(d) dirty=true; });
+  tr.classList.toggle('dirty', dirty);
+  var nm=tr.querySelector('.ename');
+  if(nm){ var div = nm.value.trim()!=='' && alnum(nm.value)!==alnum(nm.getAttribute('data-canon')); tr.classList.toggle('diverged', div); }
+}
+function refreshCounts(){
+  var n=document.querySelectorAll('tr.dirty').length;
+  document.getElementById('dirtycount').textContent = n ? (n+' row'+(n>1?'s':'')+' changed') : 'No changes';
+  document.getElementById('pushbtn').disabled = n===0;
+  var chk=document.querySelectorAll('.rowchk:checked').length;
+  var bc=document.getElementById('bulkcat');
+  document.getElementById('bulkapply').disabled = chk===0 || !bc.value;
+  document.getElementById('bulkapply').textContent='Set on selected ('+chk+')';
+}
+document.querySelectorAll('.edit').forEach(function(el){
+  el.addEventListener('input', function(){ refreshRow(el.closest('tr')); refreshCounts(); });
+  el.addEventListener('change', function(){ refreshRow(el.closest('tr')); refreshCounts(); });
+});
+document.querySelectorAll('.rowchk').forEach(function(c){ c.addEventListener('change', refreshCounts); });
+document.getElementById('chkall').addEventListener('change', function(e){
+  document.querySelectorAll('.rowchk').forEach(function(c){ c.checked=e.target.checked; }); refreshCounts();
+});
+document.getElementById('bulkcat').addEventListener('change', refreshCounts);
+document.getElementById('bulkapply').addEventListener('click', function(){
+  var val=document.getElementById('bulkcat').value; if(!val) return;
+  document.querySelectorAll('.rowchk:checked').forEach(function(c){
+    var tr=c.closest('tr'), sel=tr.querySelector('.ecat'); if(sel){ sel.value=val; refreshRow(tr); }
+  });
+  refreshCounts();
+});
+document.getElementById('pushbtn').addEventListener('click', async function(){
+  var edits=[];
+  document.querySelectorAll('tr.dirty').forEach(function(tr){
+    var e={ seq: tr.querySelector('.edit').getAttribute('data-seq') };
+    tr.querySelectorAll('.edit').forEach(function(el){ if(fieldDirty(el)) e[el.getAttribute('data-field')]=el.value; });
+    edits.push(e);
+  });
+  if(!edits.length) return;
+  var btn=document.getElementById('pushbtn'), st=document.getElementById('pushstatus');
+  btn.disabled=true; st.textContent='Pushing '+edits.length+' row(s) to Square…';
+  try{
+    var res=await fetch('/catalog/edits?client=RE',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({edits:edits})});
+    var j=await res.json();
+    if(res.ok){
+      st.textContent='Pushed — '+j.fieldsChanged+' field(s) on '+j.rowsChanged+' row(s)'+(j.errors&&j.errors.length?', '+j.errors.length+' error(s) (see console)':'')+'.';
+      var errSeqs={}; (j.errors||[]).forEach(function(x){ errSeqs[x.seq]=1; });
+      document.querySelectorAll('tr.dirty').forEach(function(tr){
+        var seq=tr.querySelector('.edit').getAttribute('data-seq'); if(errSeqs[seq]) return;
+        tr.querySelectorAll('.edit').forEach(function(el){ el.setAttribute('data-orig', el.value); el.classList.remove('dirty'); });
+        var nm=tr.querySelector('.ename'); if(nm) nm.setAttribute('data-canon', nm.value);
+        tr.classList.remove('dirty'); tr.classList.remove('diverged');
+      });
+      refreshCounts();
+      if(j.errors&&j.errors.length) console.log('edit errors', j.errors);
+    } else { st.textContent='Error: '+(j.error||res.status); btn.disabled=false; }
+  }catch(e){ st.textContent='Error: '+e.message; btn.disabled=false; }
+});
+document.querySelectorAll('.ename').forEach(function(el){ refreshRow(el.closest('tr')); });
 </script>
 </body></html>`;
 }

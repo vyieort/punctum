@@ -22,6 +22,7 @@ async function seeded(): Promise<PGlite> {
   await db.exec(mig('0001_init.sql'));
   await db.exec(mig('0004_image_reject.sql'));
   await db.exec(mig('0005_image_candidates.sql'));
+  await db.exec(mig('0009_catalog_edits.sql'));
   await db.exec(`insert into clients (id,name) values ('RE','Ritual Evolution')`);
   return db;
 }
@@ -77,6 +78,20 @@ test('renderCatalogPage gives a thumbnail + Review-alternatives to rows with can
   assert.match(html, /class="thumb" src="https:\/\/p\/1\.jpg"/);
   assert.match(html, /class="alts" data-seq="/); // review-alternatives button
   assert.match(html, /id="gallery"/); // gallery container in the preview area
+});
+
+test('renderCatalogPage renders the edit grid: editable cells, category options, bulk bar', async () => {
+  const db = await seeded();
+  await db.exec(`insert into category_map (client_id, path, square_category_id) values ('RE','Threadless > Ends','CAT_X')`);
+  await addRow(db, { sku: 'S1', vid: 'V1', status: 'PUSHED', imageUrl: 'https://p/1.jpg', imageId: 'IMG1' });
+  const html = renderCatalogPage(await getCatalogRows(db as unknown as Queryable, 'RE'), ['Threadless > Ends', 'Curved > Barbells']);
+  assert.match(html, /class="ename edit"[^>]*data-field="itemName"/); // editable name
+  assert.match(html, /class="eprice edit"[^>]*data-field="retailPrice"/); // editable price
+  assert.match(html, /class="ecat edit"[^>]*data-field="categoryPath"/); // category select
+  assert.match(html, /<option value="Curved &gt; Barbells">/); // dropdown populated from paths
+  assert.match(html, /id="pushbtn"/); // push-to-Square button
+  assert.match(html, /id="bulkapply"/); // bulk-category control
+  assert.match(html, /href="\/catalog\/edits"/); // link to the patterns report
 });
 
 test('getCandidates returns the parsed pool + the base item name', async () => {

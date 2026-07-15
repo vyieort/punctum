@@ -71,6 +71,12 @@ export async function upsertCatalogObject(cfg: SquareConfig, body: unknown): Pro
   return squareRequest(cfg, '/v2/catalog/object', { method: 'POST', body });
 }
 
+/** Fetch a single catalog object (with its current version, needed for a safe edit-upsert). */
+export async function getCatalogObject(cfg: SquareConfig, id: string): Promise<any> {
+  const j = await squareRequest(cfg, `/v2/catalog/object/${encodeURIComponent(id)}`, { method: 'GET' });
+  return j.object;
+}
+
 /** Create a catalog CATEGORY (top-level, or nested under parentId). Returns its new id. */
 export async function createCategory(
   cfg: SquareConfig,

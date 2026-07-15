@@ -82,6 +82,7 @@ async function upsertMapping(
     wholesaleCents: number;
     tags: string;
     itemDescription: string;
+    categoryPath: string;
   },
 ): Promise<void> {
   const retail = row.retailCents / 100;
@@ -95,18 +96,18 @@ async function upsertMapping(
     await db.query(
       `update catalog_mapping
          set square_item_id = $1, square_variation_id = $2, item_name = $3, variation_name = $4,
-             retail_price = $5, wholesale_price = $6, tags = $7, item_description = $8,
-             status = 'PENDING', times_ordered = $9, last_ordered = now()::date, updated_at = now()
-       where id = $10`,
-      [row.itemId, row.variationId, row.itemName, row.variationName, retail, wholesale, row.tags, row.itemDescription, (r.times_ordered ?? 0) + 1, r.id],
+             retail_price = $5, wholesale_price = $6, tags = $7, item_description = $8, category_path = $9,
+             status = 'PENDING', times_ordered = $10, last_ordered = now()::date, updated_at = now()
+       where id = $11`,
+      [row.itemId, row.variationId, row.itemName, row.variationName, retail, wholesale, row.tags, row.itemDescription, row.categoryPath || null, (r.times_ordered ?? 0) + 1, r.id],
     );
   } else {
     await db.query(
       `insert into catalog_mapping
          (client_id, vendor, vendor_sku, square_item_id, square_variation_id, item_name, variation_name,
-          retail_price, wholesale_price, tags, item_description, status, times_ordered, first_seen, last_ordered)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'PENDING', 1, now()::date, now()::date)`,
-      [clientId, row.vendor || null, row.sku, row.itemId, row.variationId, row.itemName, row.variationName, retail, wholesale, row.tags, row.itemDescription],
+          retail_price, wholesale_price, tags, item_description, category_path, status, times_ordered, first_seen, last_ordered)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'PENDING', 1, now()::date, now()::date)`,
+      [clientId, row.vendor || null, row.sku, row.itemId, row.variationId, row.itemName, row.variationName, retail, wholesale, row.tags, row.itemDescription, row.categoryPath || null],
     );
   }
 }
@@ -199,6 +200,11 @@ export async function runImport(
   const planned = planItems(toImportLines(items, { pricingRules, categoryMap }).lines);
   // POS search-suffix tags, folded into this single push (name gets a [TAGS] suffix on create).
   for (const item of planned) item.tags = computePosTags(vendor, item);
+  // Reverse the category map (id -> path) so we can persist each item's human-readable category
+  // path onto the mapping — that's what the edit grid shows and what a recategorization logs as
+  // its "old" value.
+  const pathByCategoryId = new Map<string, string>();
+  for (const [path, id] of categoryMap) if (!pathByCategoryId.has(id)) pathByCategoryId.set(id, path);
 
   await db.query(`update invoices set status = 'importing', updated_at = now() where id = $1`, [invoiceId]);
   const result: ImportResult = {
@@ -287,6 +293,7 @@ export async function runImport(
           wholesaleCents: v.wholesale_cents ?? 0,
           tags: item.tags ?? '',
           itemDescription: item.description_html ?? '',
+          categoryPath: pathByCategoryId.get(item.reporting_category_id) ?? '',
         });
       }
     } catch (e) {
