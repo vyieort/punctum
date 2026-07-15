@@ -129,6 +129,23 @@ test('reorder via name-search fallback when the SKU is not yet mapped', async ()
   assert.equal(r.variationsAdded, 1);
 });
 
+test('reorder matches a library-seeded item by NAME when the SKU differs (no duplicate)', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  // Library-seeded row: same item+variation as invoice line 1, but a generated SKU that does NOT
+  // match the invoice's NEO-1, and a real square_item_id (post Square-link sync).
+  await db.exec(`insert into catalog_mapping (client_id, vendor, vendor_sku, square_item_id, square_variation_id, item_name, variation_name, status)
+    values ('RE','NeoMetal','NEO-GEN-XYZ','LIBITEM','LIBVAR1','18G 4MM Threadless Bezel-Set [NEO 18g TL]','4MM White Opal','PUSHED')`);
+  const { ops, inventory, createdNames } = fakeOps({}); // no live search results — mapping name-match must resolve it
+  const r = await runImport(q, INV, { ops, locationId: 'LOC', occurredAt: '2026-07-13T00:00:00.000Z' });
+
+  assert.equal(r.itemsCreated, 0); // matched the existing library item by name — no duplicate ITEM
+  assert.equal(createdNames.length, 0);
+  assert.equal(r.variationsRestocked, 1); // white opal restocked onto the library variation
+  assert.equal(r.variationsAdded, 1); // champagne added as a new variation to that item
+  assert.ok(inventory.some((i) => i.catalog_object_id === 'LIBVAR1'));
+});
+
 test('recoverStuckImports re-runs every invoice left in importing', async () => {
   const db = await seeded();
   const q = db as unknown as Queryable;

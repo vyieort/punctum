@@ -138,6 +138,39 @@ async function resolveExisting(
   return { itemId, varIdBySku };
 }
 
+/**
+ * Name-based fallback: match an existing item by its base item name + variation names in our own
+ * mapping, ignoring SKUs. This is the bridge for library-seeded items (imported via the onboarding
+ * upload), whose generated SKUs won't equal a reorder invoice's vendor SKU. The stored item_name
+ * carries the live Square [TAGS] suffix, so we compare on the suffix-stripped base. Returns null
+ * unless a matched row already has a square_item_id (pre-sync rows are left to the live search).
+ */
+async function resolveExistingByName(
+  db: Queryable,
+  clientId: string,
+  item: PlannedItem,
+): Promise<{ itemId: string; varIdByName: Map<string, string> } | null> {
+  const base = norm(item.item_name);
+  if (!base) return null;
+  // Match rows whose name is the base exactly, or the base followed by a " [TAGS]" suffix.
+  const { rows } = await db.query(
+    `select square_item_id, square_variation_id, variation_name
+       from catalog_mapping
+      where client_id = $1 and (lower(item_name) = $2 or lower(item_name) like $2 || ' [%')`,
+    [clientId, base],
+  );
+  if (rows.length === 0) return null;
+  let itemId = '';
+  const varIdByName = new Map<string, string>();
+  for (const r of rows as Array<{ square_item_id: string | null; square_variation_id: string | null; variation_name: string | null }>) {
+    if (!itemId && r.square_item_id) itemId = String(r.square_item_id);
+    const nm = norm(r.variation_name);
+    if (nm && r.square_variation_id) varIdByName.set(nm, String(r.square_variation_id));
+  }
+  if (!itemId) return null; // no Square item id yet -> let the live name-search resolve it
+  return { itemId, varIdByName };
+}
+
 export async function runImport(
   db: Queryable,
   invoiceId: string,
@@ -176,12 +209,20 @@ export async function runImport(
   // doesn't abort the rest of the invoice.
   for (const item of planned) {
     try {
-      // Resolve an existing Square item: prefer our mapping (keyed by SKU, so it's immune to
-      // the tag suffix in the name), then fall back to an exact-name search on the full name.
+      // Resolve an existing Square item: prefer our mapping keyed by SKU (immune to the tag
+      // suffix), then our mapping keyed by NAME (bridge for library-seeded items whose SKUs
+      // differ), then an exact-name search against Square as the last resort.
       const mapped = await resolveExisting(db, clientId, item);
       let itemId = mapped?.itemId ?? '';
       const existingBySku = mapped?.varIdBySku ?? new Map<string, string>();
       const existingByName = new Map<string, string>();
+      if (!itemId) {
+        const byName = await resolveExistingByName(db, clientId, item);
+        if (byName) {
+          itemId = byName.itemId;
+          for (const [nm, id] of byName.varIdByName) existingByName.set(nm, id);
+        }
+      }
       if (!itemId) {
         const found = await ops.search(displayName(item));
         if (found.length > 0) {

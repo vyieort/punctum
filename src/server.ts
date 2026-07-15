@@ -24,6 +24,7 @@ import { runImport, recoverStuckImports } from './jobs/import.js';
 import { wipeSandboxCatalog } from './jobs/wipe.js';
 import { parseSquareLibraryXlsx } from './lib/library-import.js';
 import { seedLibrary } from './jobs/library-seed.js';
+import { syncLibraryItemIds } from './jobs/library-sync.js';
 import { enrichImages } from './jobs/enrich-images.js';
 import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, clearVariationImage, setItemImageFromRow } from './review/catalog.js';
 
@@ -176,6 +177,11 @@ const LIBRARY_PAGE = `<!doctype html>
   </div>
   <div id="status"></div>
   <pre id="out" hidden></pre>
+
+  <h2 style="margin-top:2rem">Link to Square</h2>
+  <p>After importing, match each seeded item to its live Square catalog id so reorders can add new variations to the existing item. Safe to run again any time.</p>
+  <button id="sync" onclick="sync()">Link to Square catalog</button>
+  <div id="syncstatus" style="margin-top:1rem;color:#333;min-height:1.2em"></div>
 <script>
 async function up(){
   var el=document.getElementById('f'), s=document.getElementById('status'), o=document.getElementById('out'), b=document.getElementById('go');
@@ -186,10 +192,21 @@ async function up(){
     var res=await fetch('/library/import?filename='+encodeURIComponent(f.name)+'&client=RE',{method:'POST',headers:{'content-type':'application/octet-stream'},body:buf});
     var j=await res.json();
     if(res.ok){
-      s.innerHTML='Done — '+j.seeded+' items seeded ('+j.inserted+' new, '+j.updated+' updated); '+j.generatedSkus+' SKUs generated. <a href="/queue">Open the queue →</a>';
+      s.innerHTML='Done — '+j.seeded+' items seeded ('+j.inserted+' new, '+j.updated+' updated); '+j.generatedSkus+' SKUs generated. Now click “Link to Square catalog” below.';
       o.hidden=false; o.textContent=JSON.stringify(j,null,2);
     } else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }
   }catch(e){ s.textContent='Error: '+e.message; b.disabled=false; }
+}
+async function sync(){
+  var b=document.getElementById('sync'), s=document.getElementById('syncstatus');
+  b.disabled=true; s.textContent='Listing the Square catalog and matching…';
+  try{
+    var res=await fetch('/library/sync?client=RE',{method:'POST'});
+    var j=await res.json();
+    if(res.ok){ s.innerHTML='Linked '+j.updated+' of '+j.needing+' items to Square. <a href="/queue">Open the queue →</a>'; }
+    else { s.textContent='Error: '+(j.error||res.status); }
+  }catch(e){ s.textContent='Error: '+e.message; }
+  b.disabled=false;
 }
 </script>
 </body></html>`;
@@ -773,6 +790,18 @@ const server = createServer(async (req, res) => {
       }
       const result = await seedLibrary(getPool() as unknown as Queryable, client, rows);
       sendJson(res, 200, { parsed: rows.length, ...result });
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  // Backfill square_item_id on seeded rows by matching against the live Square catalog.
+  if (url.pathname === '/library/sync' && req.method === 'POST') {
+    const client = url.searchParams.get('client') ?? 'RE';
+    try {
+      const result = await syncLibraryItemIds(getPool() as unknown as Queryable, client);
+      sendJson(res, 200, result);
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }
