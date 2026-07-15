@@ -119,7 +119,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
         <td class="showcell">${thumb}${useItem}</td>
         <td class="editcell">
           <input class="ename edit" data-seq="${esc(r.seq)}" data-field="itemName" data-orig="${esc(r.itemName)}" data-canon="${esc(r.itemName)}" value="${esc(r.itemName)}">
-          <span class="warn" title="Off the naming convention — logged for review">&#9888;</span>
+          ${r.squareItemId ? `<a class="itemlink" href="/items/${esc(r.squareItemId)}" title="Open item detail page">&#8599;</a>` : ''}<span class="warn" title="Off the naming convention — logged for review">&#9888;</span>
           <div class="canon">convention: ${esc(r.itemName) || '—'}</div>
           <input class="edesc edit" data-seq="${esc(r.seq)}" data-field="description" data-orig="${esc(r.description)}" value="${esc(r.description)}" placeholder="description…">
           ${r.tags ? `<div class="tags">${esc(r.tags)}</div>` : ''}
@@ -185,6 +185,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   .editcell{min-width:230px}
   input.edit,select.edit{font:inherit;font-size:12px;padding:.2rem .3rem;border:1px solid #d1d5db;border-radius:4px;width:100%;box-sizing:border-box}
   input.ename{font-weight:600}
+  .itemlink{color:#2563eb;text-decoration:none;font-size:12px;margin-left:2px}
   input.eprice{width:74px}
   .edesc{margin-top:3px;color:#374151}
   tr.dirty{background:#fffbeb} tr.dirty td{border-bottom-color:#fde68a}
@@ -494,6 +495,50 @@ export async function setVariationImage(
        where client_id = $1 and seq = $2`,
     [clientId, seq, dl.url, attached.imageId],
   );
+  return { ok: true };
+}
+
+/**
+ * Attach an operator-uploaded photo (raw bytes) to a variation's Square image — the studios'
+ * own-photography path. Unlike setVariationImage it doesn't download from a URL; the bytes are the
+ * upload. Explicit user action, so it replaces any existing image (delete-then-attach). A unique
+ * sourceUrl per upload keeps the Square idempotency key fresh (re-uploading = a new image).
+ */
+export async function uploadVariationImage(
+  db: Queryable,
+  clientId: string,
+  seq: string,
+  file: { bytes: Buffer; contentType: string },
+  opts: { ops?: ImageEditOps; setItem?: boolean } = {},
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isAllowedImageType(file.contentType)) {
+    return { ok: false, error: `unsupported image type: ${file.contentType || 'unknown'}` };
+  }
+  if (file.bytes.length === 0) return { ok: false, error: 'empty upload' };
+  const ops = opts.ops ?? liveImageEditOps(squareConfigFromEnv());
+  const { rows } = await db.query(
+    `select square_variation_id, square_item_id, item_name, square_image_id
+       from catalog_mapping where client_id = $1 and seq = $2`,
+    [clientId, seq],
+  );
+  if (rows.length === 0) return { ok: false, error: 'row not found' };
+  const row = rows[0] as { square_variation_id: string | null; square_item_id: string | null; item_name: string | null; square_image_id: string | null };
+  if (!row.square_variation_id) return { ok: false, error: 'no Square variation for this row' };
+
+  if (row.square_image_id) await ops.deleteImage(row.square_image_id).catch(() => {});
+  const attached = await ops.attach({
+    variationId: row.square_variation_id,
+    itemName: row.item_name ?? '',
+    bytes: file.bytes,
+    contentType: file.contentType,
+    sourceUrl: `upload:${seq}:${Date.now()}`,
+  });
+  await db.query(
+    `update catalog_mapping set status = 'ENRICHED', image_url = $3, square_image_id = $4, updated_at = now()
+       where client_id = $1 and seq = $2`,
+    [clientId, seq, attached.url, attached.imageId],
+  );
+  if (opts.setItem && row.square_item_id) await ops.setItemImage(row.square_item_id, attached.imageId).catch(() => {});
   return { ok: true };
 }
 

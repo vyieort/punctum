@@ -26,7 +26,8 @@ import { parseSquareLibraryXlsx } from './lib/library-import.js';
 import { seedLibrary } from './jobs/library-seed.js';
 import { syncLibraryItemIds } from './jobs/library-sync.js';
 import { enrichImages } from './jobs/enrich-images.js';
-import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, clearVariationImage, setItemImageFromRow } from './review/catalog.js';
+import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, clearVariationImage, setItemImageFromRow, uploadVariationImage } from './review/catalog.js';
+import { getItemDetail, renderItemPage } from './review/item-detail.js';
 import { applyEdits, getEditPatterns, getCategoryPaths, clearEdits, type RowEdit } from './review/catalog-edit.js';
 import { renderPatternsPage } from './review/patterns-page.js';
 import { syncCategoryPaths } from './jobs/category-sync.js';
@@ -790,6 +791,48 @@ const server = createServer(async (req, res) => {
     try {
       const result = await setItemImageFromRow(getPool() as unknown as Queryable, client, seq);
       sendJson(res, result.ok ? 200 : 404, result);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  // Upload the studio's own photo (raw image bytes) to a variation; ?setItem=1 also promotes it.
+  if (url.pathname === '/catalog/upload-image' && req.method === 'POST') {
+    const client = authedClient;
+    const seq = url.searchParams.get('seq');
+    if (!seq) {
+      sendJson(res, 400, { error: "missing required query param: 'seq'" });
+      return;
+    }
+    try {
+      const bytes = await readBodyBuffer(req);
+      const contentType = req.headers['content-type'] ?? 'application/octet-stream';
+      const result = await uploadVariationImage(
+        getPool() as unknown as Queryable,
+        client,
+        seq,
+        { bytes, contentType },
+        { setItem: url.searchParams.get('setItem') === '1' },
+      );
+      sendJson(res, result.ok ? 200 : 400, result);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  // Item detail page: one product, its variations, and per-variation photo upload.
+  const itemParts = url.pathname.split('/').filter(Boolean);
+  if (itemParts[0] === 'items' && itemParts.length === 2 && req.method === 'GET') {
+    try {
+      const item = await getItemDetail(getPool() as unknown as Queryable, authedClient, decodeURIComponent(itemParts[1]!));
+      if (!item) {
+        sendJson(res, 404, { error: 'item not found' });
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(renderItemPage(item));
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }
