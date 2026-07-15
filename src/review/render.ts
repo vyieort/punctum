@@ -63,7 +63,7 @@ ${status === 'importing' ? '<meta http-equiv="refresh" content="4">' : ''}
   th,td{border:1px solid #e6e6e6;padding:.4rem .55rem;text-align:left;vertical-align:top}
   th{background:#f6f6f6;font-weight:600}
   td.num{text-align:right;font-variant-numeric:tabular-nums} td.ctr{text-align:center}
-  tbody tr:nth-child(even){background:#fafafa}
+  tbody tr:nth-child(even){background:#e0f7fa}
   tbody tr.flag{background:#fffbeb;box-shadow:inset 3px 0 0 #d97706}
   .flagnote{color:#b45309;font-size:12px;margin-top:2px}
   .flagsummary{background:#fffbeb;border:1px solid #fcd34d;color:#92400e;padding:.4rem .7rem;border-radius:6px;font-size:13px;margin:0 0 .7rem}
