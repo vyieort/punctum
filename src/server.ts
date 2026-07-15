@@ -31,7 +31,7 @@ import { applyEdits, getEditPatterns, getCategoryPaths, clearEdits, type RowEdit
 import { renderPatternsPage } from './review/patterns-page.js';
 import { syncCategoryPaths } from './jobs/category-sync.js';
 import { passwordLogin } from './auth/gotrue.js';
-import { getUser, ACCESS_COOKIE, REFRESH_COOKIE } from './auth/session.js';
+import { getUser, getSession, ACCESS_COOKIE, REFRESH_COOKIE } from './auth/session.js';
 import { resolveClientForUser } from './auth/tenant.js';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -569,6 +569,24 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // ---- Auth gate: everything below requires a signed-in session; scope is the user's tenant. ----
+  let session: Awaited<ReturnType<typeof getSession>> = null;
+  try {
+    session = await getSession(req, getPool() as unknown as Queryable);
+  } catch {
+    session = null;
+  }
+  if (!session) {
+    if ((req.method ?? 'GET') === 'GET') {
+      res.writeHead(302, { location: '/login' });
+      res.end();
+    } else {
+      sendJson(res, 401, { error: 'not authenticated' });
+    }
+    return;
+  }
+  const authedClient = session.clientId; // replaces the old ?client=RE param (can't be spoofed)
+
   if (url.pathname === '/tags') {
     const item = url.searchParams.get('item');
     if (!item) {
@@ -580,7 +598,7 @@ const server = createServer(async (req, res) => {
   }
 
   if (url.pathname === '/jobs/tags/run') {
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     try {
       const summary = await runTagsJob(getPool() as unknown as Queryable, client);
       sendJson(res, 200, {
@@ -603,7 +621,7 @@ const server = createServer(async (req, res) => {
   // Import dry-run: show exactly what an approved invoice WOULD push to Square (no writes).
   if (url.pathname === '/jobs/import/preview') {
     const invoiceId = url.searchParams.get('invoice');
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     if (!invoiceId) {
       sendJson(res, 400, { error: "missing required query param: 'invoice'" });
       return;
@@ -642,7 +660,7 @@ const server = createServer(async (req, res) => {
 
   // Catalog review: GET renders the catalog with inline matched images; POST rejects a bad one.
   if (url.pathname === '/catalog' && req.method === 'GET') {
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     try {
       const pool = getPool() as unknown as Queryable;
       const [rows, categoryPaths] = await Promise.all([getCatalogRows(pool, client), getCategoryPaths(pool, client)]);
@@ -655,7 +673,7 @@ const server = createServer(async (req, res) => {
   }
   // Learning-loop report: recurring corrections that point at import-rule fixes.
   if (url.pathname === '/catalog/edits' && req.method === 'GET') {
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     try {
       const report = await getEditPatterns(getPool() as unknown as Queryable, client);
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -667,7 +685,7 @@ const server = createServer(async (req, res) => {
   }
   // Backfill category_path from the live Square catalog (populate the grid's category defaults).
   if (url.pathname === '/catalog/sync-categories' && req.method === 'POST') {
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     try {
       sendJson(res, 200, await syncCategoryPaths(getPool() as unknown as Queryable, client));
     } catch (err) {
@@ -677,7 +695,7 @@ const server = createServer(async (req, res) => {
   }
   // Reset the correction log (advisory only — clears test edits from the patterns report).
   if (url.pathname === '/catalog/edits/clear' && req.method === 'POST') {
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     try {
       sendJson(res, 200, await clearEdits(getPool() as unknown as Queryable, client));
     } catch (err) {
@@ -687,7 +705,7 @@ const server = createServer(async (req, res) => {
   }
   // Batch item edits: push changed fields to Square, log corrections, update the mapping.
   if (url.pathname === '/catalog/edits' && req.method === 'POST') {
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     try {
       const raw = await readBodyBuffer(req);
       const parsed = JSON.parse(raw.toString('utf8') || '{}') as { edits?: RowEdit[] };
@@ -701,7 +719,7 @@ const server = createServer(async (req, res) => {
   }
   // Review-alternatives: read the stored candidate pool for a variation.
   if (url.pathname === '/catalog/candidates' && req.method === 'GET') {
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     const seq = url.searchParams.get('seq');
     if (!seq) {
       sendJson(res, 400, { error: "missing required query param: 'seq'" });
@@ -716,7 +734,7 @@ const server = createServer(async (req, res) => {
   }
   // Replace a variation's image with a chosen candidate.
   if (url.pathname === '/catalog/set-image' && req.method === 'POST') {
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     const seq = url.searchParams.get('seq');
     const imageUrl = url.searchParams.get('url');
     const thumbUrl = url.searchParams.get('thumb') ?? '';
@@ -734,7 +752,7 @@ const server = createServer(async (req, res) => {
   }
   // Promote a variation's image to its item's primary (grid) image.
   if (url.pathname === '/catalog/set-item-image' && req.method === 'POST') {
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     const seq = url.searchParams.get('seq');
     if (!seq) {
       sendJson(res, 400, { error: "missing required query param: 'seq'" });
@@ -751,7 +769,7 @@ const server = createServer(async (req, res) => {
 
   // Clear a variation's image (none of the candidates fit).
   if (url.pathname === '/catalog/clear-image' && req.method === 'POST') {
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     const seq = url.searchParams.get('seq');
     if (!seq) {
       sendJson(res, 400, { error: "missing required query param: 'seq'" });
@@ -774,7 +792,7 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === 'POST') {
-      const client = url.searchParams.get('client') ?? 'RE';
+      const client = authedClient;
       const limit = Number(url.searchParams.get('limit')) || 10;
       try {
         const result = await enrichImages(getPool() as unknown as Queryable, client, { limit });
@@ -794,7 +812,7 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === 'POST') {
-      const client = url.searchParams.get('client') ?? 'RE';
+      const client = authedClient;
       try {
         const result = await wipeSandboxCatalog(getPool() as unknown as Queryable, client);
         sendJson(res, 200, result);
@@ -838,7 +856,7 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === 'POST') {
-      const client = url.searchParams.get('client') ?? 'RE';
+      const client = authedClient;
       try {
         const result = await provisionCategories(squareConfigFromEnv(), getPool() as unknown as Queryable, client);
         sendJson(res, 200, { client, created: result.created });
@@ -880,7 +898,7 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'empty upload' });
         return;
       }
-      const client = url.searchParams.get('client') ?? 'RE';
+      const client = authedClient;
       const filename = url.searchParams.get('filename') ?? undefined;
       const result = await ingestInvoice(getPool() as unknown as Queryable, client, {
         pdfBase64: pdf.toString('base64'),
@@ -906,7 +924,7 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'empty upload' });
         return;
       }
-      const client = url.searchParams.get('client') ?? 'RE';
+      const client = authedClient;
       const filename = url.searchParams.get('filename') ?? undefined;
       const result = await queueInvoice(getPool() as unknown as Queryable, client, {
         pdfBase64: pdf.toString('base64'),
@@ -932,7 +950,7 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'empty upload' });
         return;
       }
-      const client = url.searchParams.get('client') ?? 'RE';
+      const client = authedClient;
       const rows = parseSquareLibraryXlsx(buf);
       if (rows.length === 0) {
         sendJson(res, 400, { error: 'no rows found — is this a Square Item Library export?' });
@@ -948,7 +966,7 @@ const server = createServer(async (req, res) => {
 
   // Backfill square_item_id on seeded rows by matching against the live Square catalog.
   if (url.pathname === '/library/sync' && req.method === 'POST') {
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     try {
       const result = await syncLibraryItemIds(getPool() as unknown as Queryable, client);
       sendJson(res, 200, result);
@@ -960,7 +978,7 @@ const server = createServer(async (req, res) => {
 
   // Re-queue every errored invoice that still has its PDF (worker retries them).
   if (url.pathname === '/queue/retry' && req.method === 'POST') {
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     try {
       const result = await requeueErrored(getPool() as unknown as Queryable, client);
       sendJson(res, 200, result);
@@ -972,7 +990,7 @@ const server = createServer(async (req, res) => {
 
   // Review queue: every invoice with its status + a Review link once ready.
   if (url.pathname === '/queue' && req.method === 'GET') {
-    const client = url.searchParams.get('client') ?? 'RE';
+    const client = authedClient;
     try {
       const rows = await getQueueRows(getPool() as unknown as Queryable, client);
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
