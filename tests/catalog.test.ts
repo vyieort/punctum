@@ -95,6 +95,8 @@ test('renderCatalogPage renders the edit grid: editable cells, category options,
   assert.match(html, /id="bulkphotos"/); // bulk-photo filmstrip trigger
   assert.match(html, /id="phototray"/); // filmstrip tray container
   assert.match(html, /data-sku="S1"/); // row carries data for filename matching
+  assert.match(html, /class="sortable" data-key="retail"/); // sortable column headers
+  assert.match(html, /data-wholesale=/); // rows carry sort values
 });
 
 test('renderCatalogPage flags + counts uncategorized rows', async () => {

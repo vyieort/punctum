@@ -118,7 +118,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
       const alts = r.hasCandidates
         ? `<button class="alts" data-seq="${esc(r.seq)}" data-cap="${esc(caption)}">Review alternatives</button>`
         : '';
-      return `<tr id="row-${esc(r.seq)}" class="${needsCategory(r) ? 'needsattn' : ''}" data-seq="${esc(r.seq)}" data-sku="${esc(r.vendorSku)}" data-item="${esc(r.itemName)}" data-variation="${esc(r.variationName)}">
+      return `<tr id="row-${esc(r.seq)}" class="${needsCategory(r) ? 'needsattn' : ''}" data-seq="${esc(r.seq)}" data-sku="${esc(r.vendorSku)}" data-item="${esc(r.itemName)}" data-variation="${esc(r.variationName)}" data-vendor="${esc(r.vendor)}" data-category="${esc(r.categoryPath)}" data-wholesale="${esc(r.wholesalePrice)}" data-retail="${esc(r.retailPrice)}" data-status="${esc(r.status)}">
         <td class="chkcell"><input type="checkbox" class="rowchk" data-seq="${esc(r.seq)}"></td>
         <td class="showcell">${thumb}${useItem}</td>
         <td class="editcell">
@@ -162,6 +162,10 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   table{border-collapse:collapse;width:100%;font-size:13px}
   th,td{border-bottom:1px solid #eee;padding:.5rem .6rem;text-align:left;vertical-align:top}
   th{color:#666;font-weight:600}
+  th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
+  th.sortable:hover{color:#166534}
+  th.sortable::after{content:'\\2195';font-size:10px;color:#d1d5db;margin-left:3px}
+  th.sortable.asc::after{content:'\\25B2';color:#166534} th.sortable.desc::after{content:'\\25BC';color:#166534}
   .showcell{width:66px}
   .thumb{width:50px;height:50px;object-fit:cover;border-radius:5px;border:1px solid #e5e7eb;background:#f3f4f6;cursor:pointer;display:block}
   .nothumb{color:#9ca3af}
@@ -246,7 +250,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   </div>
   <div id="phototray" hidden></div>
   <table>
-    <thead><tr><th><input type="checkbox" id="chkall"></th><th></th><th>Item &amp; description</th><th>Variation</th><th>Category</th><th>Vendor</th><th>SKU</th><th>Wholesale</th><th>Retail</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th><input type="checkbox" id="chkall"></th><th></th><th class="sortable" data-key="item">Item &amp; description</th><th class="sortable" data-key="variation">Variation</th><th class="sortable" data-key="category">Category</th><th class="sortable" data-key="vendor">Vendor</th><th class="sortable" data-key="sku">SKU</th><th class="sortable" data-key="wholesale">Wholesale</th><th class="sortable" data-key="retail">Retail</th><th class="sortable" data-key="status">Status</th><th></th></tr></thead>
     <tbody>${body}</tbody>
   </table>
 <script>
@@ -516,6 +520,23 @@ if(sc) sc.addEventListener('click', async function(){
     else { st.textContent='Error: '+(j.error||res.status); sc.disabled=false; }
   }catch(e){ st.textContent='Error: '+e.message; sc.disabled=false; }
 });
+
+// --- Sort the table by clicking a column header (client-side; moves rows so edits/state survive) ---
+var sortKey=null, sortDir=1;
+function catSort(key){
+  var tbody=document.querySelector('tbody'); if(!tbody) return;
+  if(sortKey===key){ sortDir=-sortDir; } else { sortKey=key; sortDir=1; }
+  var numeric=(key==='wholesale'||key==='retail');
+  var rows=Array.prototype.slice.call(tbody.querySelectorAll('tr'));
+  rows.sort(function(a,b){
+    var av=a.getAttribute('data-'+key)||'', bv=b.getAttribute('data-'+key)||'';
+    if(numeric){ return ((parseFloat(av)||0)-(parseFloat(bv)||0))*sortDir; }
+    return av.toLowerCase().localeCompare(bv.toLowerCase())*sortDir;
+  });
+  rows.forEach(function(r){ tbody.appendChild(r); });
+  document.querySelectorAll('th.sortable').forEach(function(th){ th.classList.remove('asc','desc'); if(th.getAttribute('data-key')===key) th.classList.add(sortDir>0?'asc':'desc'); });
+}
+document.querySelectorAll('th.sortable').forEach(function(th){ th.addEventListener('click', function(){ catSort(th.getAttribute('data-key')); }); });
 </script>
 </body></html>`;
 }
