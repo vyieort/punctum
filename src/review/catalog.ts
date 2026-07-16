@@ -146,7 +146,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
 <style>
   body{font-family:system-ui,-apple-system,sans-serif;margin:0 auto;max-width:1280px;color:#1a1a1a;padding:1.25rem 1rem}
   h2{margin:0 0 .25rem} .sub{color:#555;margin:0 0 .75rem;font-size:14px}
-  #preview{position:sticky;top:0;background:#fff;border-bottom:2px solid #eee;padding:.5rem 0 .9rem;z-index:5;
+  #preview{background:#fff;border-bottom:2px solid #eee;padding:.5rem 0 .9rem;
     display:flex;flex-direction:column;align-items:center}
   #pv{width:500px;height:500px;max-width:100%;object-fit:contain;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px}
   #pvempty{width:500px;max-width:100%;height:180px;display:flex;align-items:center;justify-content:center;
@@ -191,13 +191,18 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   input.ename{font-weight:600}
   .itemlink{color:#2563eb;text-decoration:none;font-size:12px;margin-left:2px}
   #bulkphotos{border-color:#7c3aed;background:#fff;color:#7c3aed}
-  #phototray{position:sticky;top:44px;z-index:6;background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:.6rem;margin-bottom:.5rem}
+  #phototray{background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:.6rem;margin-bottom:.5rem}
   .trayhead{font-size:13px;color:#374151;margin-bottom:.5rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
   .trayhead button{font:inherit;font-size:12px;padding:.3rem .7rem;border-radius:6px;cursor:pointer;border:1px solid #7c3aed;background:#7c3aed;color:#fff}
   .trayhead .traycancel{border-color:#9ca3af;background:#fff;color:#374151}
   .trayhead button:disabled{opacity:.5}
   .strip{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
-  .pcell{flex:0 0 96px;border:2px solid #e9d5ff;border-radius:8px;padding:4px;background:#fff;cursor:grab;text-align:center}
+  .pcell{position:relative;flex:0 0 96px;border:2px solid #e9d5ff;border-radius:8px;padding:4px;background:#fff;cursor:grab;text-align:center}
+  .pstatus{position:absolute;inset:0;display:none;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff;background:rgba(17,24,39,.5);border-radius:8px}
+  .pstatus.ok{background:rgba(22,101,52,.62)} .pstatus.err{background:rgba(185,28,28,.68)}
+  .pcell.busy .pthumb{opacity:.45}
+  .pstatus.busy::after{content:'';width:20px;height:20px;border:3px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:pspin .7s linear infinite}
+  @keyframes pspin{to{transform:rotate(360deg)}}
   .pcell.matched{border-color:#16a34a;background:#f0fdf4}
   .pthumb{width:86px;height:70px;object-fit:cover;border-radius:4px;display:block}
   .pcap{font-size:9px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
@@ -440,17 +445,44 @@ document.getElementById('photofiles').addEventListener('change', function(){
   });
   pCount();
 });
+function pmark(fid, txt, cls){
+  var cell=document.querySelector('.pcell[data-fid="'+fid+'"]'); if(!cell) return;
+  var s=cell.querySelector('.pstatus'); if(!s){ s=document.createElement('div'); s.className='pstatus'; cell.appendChild(s); }
+  s.textContent=txt||''; s.className='pstatus '+(cls||''); s.style.display='flex';
+  cell.classList.toggle('busy', cls==='busy');
+}
+// Downscale big camera/phone JPEGs in the browser before upload (Square caps images ~15MB; a POS
+// photo only needs ~2000px). HEIC/other types pass straight through — the server converts those.
+function downscale(file, maxPx, quality){
+  return new Promise(function(resolve){
+    if(!/^image\\/(jpeg|png|webp)$/i.test(file.type||'')){ resolve(file); return; }
+    var img=new Image(), url=URL.createObjectURL(file);
+    img.onload=function(){
+      var w=img.naturalWidth, h=img.naturalHeight, m=Math.max(w,h);
+      if(m<=maxPx){ URL.revokeObjectURL(url); resolve(file); return; }
+      var sc=maxPx/m, c=document.createElement('canvas'); c.width=Math.round(w*sc); c.height=Math.round(h*sc);
+      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+      c.toBlob(function(bl){ URL.revokeObjectURL(url); resolve(bl||file); }, 'image/jpeg', quality);
+    };
+    img.onerror=function(){ URL.revokeObjectURL(url); resolve(file); };
+    img.src=url;
+  });
+}
 async function pApply(){
   var b=document.getElementById('applyphotos'); b.disabled=true;
   var ids=Object.keys(pAssign), done=0, errs=0;
   for(var i=0;i<ids.length;i++){
-    var f=pFiles[ids[i]], seq=pAssign[ids[i]];
-    try{ var buf=await f.arrayBuffer(); var res=await fetch('/catalog/upload-image?seq='+encodeURIComponent(seq),{method:'POST',headers:{'content-type':f.type||'application/octet-stream'},body:buf}); if(res.ok) done++; else errs++; }
-    catch(e){ errs++; }
-    b.textContent='Uploading '+(done+errs)+'/'+ids.length+'…';
+    var id=ids[i], seq=pAssign[id], f=pFiles[id];
+    pmark(id,'','busy'); // spinner overlay on this photo while it uploads
+    b.textContent='Uploading '+(done+errs+1)+'/'+ids.length+'…';
+    try{
+      var toSend=await downscale(f,2048,0.85);
+      var res=await fetch('/catalog/upload-image?seq='+encodeURIComponent(seq),{method:'POST',headers:{'content-type':(toSend.type||f.type||'application/octet-stream')},body:toSend});
+      if(res.ok){ done++; pmark(id,'✓','ok'); } else { errs++; pmark(id,'✗','err'); }
+    }catch(e){ errs++; pmark(id,'✗','err'); }
   }
   b.textContent='Done — '+done+' applied'+(errs?', '+errs+' failed':'')+'. Reloading…';
-  setTimeout(function(){ location.reload(); }, 900);
+  setTimeout(function(){ location.reload(); }, 1300);
 }
 
 // Fill the category column from Square, then reload to show it.

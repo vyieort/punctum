@@ -41,6 +41,36 @@ export async function getQueueRows(db: Queryable, clientId: string, limit = 200)
   });
 }
 
+/**
+ * Flip the given invoices from in_review -> importing (atomic + tenant-scoped; only in_review rows
+ * change). Returns which ids were actually approved so the caller can fire their (serialized)
+ * imports. Ids that aren't this tenant's in_review invoices are skipped.
+ */
+export async function bulkApproveInvoices(
+  db: Queryable,
+  clientId: string,
+  ids: string[],
+): Promise<{ approvedIds: string[]; skipped: number }> {
+  const approvedIds: string[] = [];
+  let skipped = 0;
+  for (const id of ids) {
+    let ok = false;
+    try {
+      const upd = await db.query(
+        `update invoices set status = 'importing', updated_at = now()
+           where id = $1 and client_id = $2 and status = 'in_review' returning id`,
+        [id, clientId],
+      );
+      ok = upd.rows.length > 0;
+    } catch {
+      ok = false; // e.g. a malformed id
+    }
+    if (ok) approvedIds.push(id);
+    else skipped++;
+  }
+  return { approvedIds, skipped };
+}
+
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -76,6 +106,7 @@ export function renderQueuePage(rows: QueueRow[]): string {
   const countLine = Object.entries(counts)
     .map(([s, n]) => `${n} ${STATUS_LABEL[s] ?? s}`)
     .join(' · ');
+  const inReviewCount = counts.in_review ?? 0;
 
   const body = rows
     .map((r) => {
@@ -87,6 +118,7 @@ export function renderQueuePage(rows: QueueRow[]): string {
       const action = `<a class="review" href="/invoices/${esc(r.id)}/review">${linkLabel}</a>`;
       const total = r.total ? `$${esc(r.total)}` : '';
       return `<tr>
+        <td class="chk">${r.status === 'in_review' ? `<input type="checkbox" class="qchk" data-id="${esc(r.id)}">` : ''}</td>
         <td>${esc(r.created)}<div class="fn">${esc(r.filename)}</div></td>
         <td>${esc(r.vendor)}</td>
         <td>${esc(r.invoiceNumber)}</td>
@@ -114,14 +146,18 @@ ${working ? '<meta http-equiv="refresh" content="8">' : ''}
   .fn{color:#9ca3af;font-size:11px;margin-top:2px}
   .badge{color:#fff;border-radius:999px;padding:.1rem .5rem;font-size:11px;font-weight:600;white-space:nowrap}
   a.review{color:#166534;font-weight:600;text-decoration:none} a{color:#2563eb}
+  td.chk,th.chk{width:26px}
+  button.approve{font:inherit;font-size:13px;padding:.3rem .8rem;border:1px solid #166534;background:#166534;color:#fff;border-radius:6px;cursor:pointer;margin-bottom:1rem}
+  button.approve:disabled{opacity:.45;cursor:default}
 </style></head>
 <body>
   <h2>Review queue</h2>
   <p class="sub">${rows.length} invoices${countLine ? ' — ' + esc(countLine) : ''}.${working ? ' Refreshing while items extract…' : ''}</p>
   <a class="btn" href="/invoices/batch">+ Upload more invoices</a>
+  ${inReviewCount ? '<button class="approve" id="approvebtn" disabled onclick="approveSelected()">Approve selected</button>' : ''}
   ${counts.error ? `<button class="retry" onclick="retryErrored(this)">Retry ${counts.error} errored</button>` : ''}
   <table>
-    <thead><tr><th>Uploaded</th><th>Vendor</th><th>Invoice #</th><th>Lines</th><th>Total</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th class="chk">${inReviewCount ? '<input type="checkbox" id="qall">' : ''}</th><th>Uploaded</th><th>Vendor</th><th>Invoice #</th><th>Lines</th><th>Total</th><th>Status</th><th></th></tr></thead>
     <tbody>${body}</tbody>
   </table>
 <script>
@@ -129,6 +165,20 @@ async function retryErrored(b){
   b.disabled=true; b.textContent='Re-queuing…';
   try{ await fetch('/queue/retry?client=RE',{method:'POST'}); location.reload(); }
   catch(e){ b.disabled=false; alert(e.message); }
+}
+function selectedIds(){ return Array.prototype.map.call(document.querySelectorAll('.qchk:checked'), function(c){ return c.getAttribute('data-id'); }); }
+function updateApprove(){ var n=selectedIds().length, b=document.getElementById('approvebtn'); if(b){ b.disabled=n===0; b.textContent=n?('Approve '+n+' selected'):'Approve selected'; } }
+document.querySelectorAll('.qchk').forEach(function(c){ c.addEventListener('change', updateApprove); });
+var qall=document.getElementById('qall'); if(qall) qall.addEventListener('change', function(e){ document.querySelectorAll('.qchk').forEach(function(c){ c.checked=e.target.checked; }); updateApprove(); });
+async function approveSelected(){
+  var ids=selectedIds(); if(!ids.length) return;
+  if(!confirm('Approve '+ids.length+' invoice(s) and push to Square?')) return;
+  var b=document.getElementById('approvebtn'); b.disabled=true; b.textContent='Approving '+ids.length+'…';
+  try{
+    var res=await fetch('/queue/approve',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ids:ids})});
+    var j=await res.json();
+    if(res.ok){ location.reload(); } else { alert('Error: '+(j.error||res.status)); b.disabled=false; updateApprove(); }
+  }catch(e){ alert(e.message); b.disabled=false; updateApprove(); }
 }
 </script>
 </body></html>`;

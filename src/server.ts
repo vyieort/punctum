@@ -15,7 +15,7 @@ import { runTagsJob, type Queryable } from './jobs/pg-rows.js';
 import { handleReview } from './review/handler.js';
 import { ingestInvoice, queueInvoice, requeueErrored } from './jobs/intake.js';
 import { startWorker } from './jobs/worker.js';
-import { getQueueRows, renderQueuePage } from './review/queue.js';
+import { getQueueRows, renderQueuePage, bulkApproveInvoices } from './review/queue.js';
 import { squareConfigFromEnv, listLocations } from './lib/square-client.js';
 import { previewInvoiceImport } from './jobs/import-preview.js';
 import { provisionCategories } from './jobs/provision-categories.js';
@@ -1102,6 +1102,24 @@ const server = createServer(async (req, res) => {
     try {
       const result = await requeueErrored(getPool() as unknown as Queryable, client);
       sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  // Bulk approve: flip selected in_review invoices to importing and fire their pushes. runImport is
+  // serialized (withImportLock), so N approvals push one-at-a-time — no concurrent "catalog locked".
+  if (url.pathname === '/queue/approve' && req.method === 'POST') {
+    const client = authedClient;
+    try {
+      const raw = await readBodyBuffer(req);
+      const { ids } = JSON.parse(raw.toString('utf8') || '{}') as { ids?: string[] };
+      const list = Array.isArray(ids) ? ids : [];
+      const pool = getPool() as unknown as Queryable;
+      const { approvedIds, skipped } = await bulkApproveInvoices(pool, client, list);
+      for (const id of approvedIds) void runImport(pool, id).catch(() => {}); // serialized in runImport
+      sendJson(res, 200, { approved: approvedIds.length, skipped });
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }

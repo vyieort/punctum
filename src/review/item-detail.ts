@@ -165,6 +165,15 @@ export function renderVariationPage(v: VariationDetail): string {
 <script>
 var SEQ=${JSON.stringify(v.seq)};
 function st(t){ document.getElementById('status').textContent=t; }
+function downscale(file, maxPx, quality){
+  return new Promise(function(resolve){
+    if(!/^image\\/(jpeg|png|webp)$/i.test(file.type||'')){ resolve(file); return; }
+    var img=new Image(), url=URL.createObjectURL(file);
+    img.onload=function(){ var w=img.naturalWidth,h=img.naturalHeight,m=Math.max(w,h); if(m<=maxPx){ URL.revokeObjectURL(url); resolve(file); return; } var sc=maxPx/m,c=document.createElement('canvas'); c.width=Math.round(w*sc); c.height=Math.round(h*sc); c.getContext('2d').drawImage(img,0,0,c.width,c.height); c.toBlob(function(bl){ URL.revokeObjectURL(url); resolve(bl||file); },'image/jpeg',quality); };
+    img.onerror=function(){ URL.revokeObjectURL(url); resolve(file); };
+    img.src=url;
+  });
+}
 document.getElementById('save').addEventListener('click', async function(){
   var b=this; b.disabled=true; st('Saving to Square…');
   var edit={ seq:SEQ, variationName:document.getElementById('vname').value, retailPrice:document.getElementById('price').value };
@@ -180,8 +189,8 @@ document.getElementById('file').addEventListener('change', async function(){
   if(!this.files||!this.files[0]) return;
   var f=this.files[0]; st('Uploading '+f.name+'…');
   try{
-    var buf=await f.arrayBuffer();
-    var res=await fetch('/catalog/upload-image?seq='+encodeURIComponent(SEQ),{method:'POST',headers:{'content-type':f.type||'application/octet-stream'},body:buf});
+    var toSend=await downscale(f,2048,0.85);
+    var res=await fetch('/catalog/upload-image?seq='+encodeURIComponent(SEQ),{method:'POST',headers:{'content-type':toSend.type||f.type||'application/octet-stream'},body:toSend});
     var j=await res.json();
     if(res.ok&&j.ok){ st('Uploaded ✓ — reloading…'); setTimeout(function(){location.reload();},600); } else { st('Error: '+(j.error||res.status)); }
   }catch(e){ st('Error: '+e.message); }
@@ -261,14 +270,23 @@ export function renderItemPage(item: ItemDetail): string {
   </table>
 <script>
 function setStatus(t){ document.getElementById('status').textContent = t; }
+function downscale(file, maxPx, quality){
+  return new Promise(function(resolve){
+    if(!/^image\\/(jpeg|png|webp)$/i.test(file.type||'')){ resolve(file); return; }
+    var img=new Image(), url=URL.createObjectURL(file);
+    img.onload=function(){ var w=img.naturalWidth,h=img.naturalHeight,m=Math.max(w,h); if(m<=maxPx){ URL.revokeObjectURL(url); resolve(file); return; } var sc=maxPx/m,c=document.createElement('canvas'); c.width=Math.round(w*sc); c.height=Math.round(h*sc); c.getContext('2d').drawImage(img,0,0,c.width,c.height); c.toBlob(function(bl){ URL.revokeObjectURL(url); resolve(bl||file); },'image/jpeg',quality); };
+    img.onerror=function(){ URL.revokeObjectURL(url); resolve(file); };
+    img.src=url;
+  });
+}
 document.querySelectorAll('input[type=file]').forEach(function(inp){
   inp.addEventListener('change', async function(){
     if(!inp.files || !inp.files[0]) return;
     var f=inp.files[0], seq=inp.getAttribute('data-seq');
     setStatus('Uploading '+f.name+'…');
     try{
-      var buf=await f.arrayBuffer();
-      var res=await fetch('/catalog/upload-image?seq='+encodeURIComponent(seq),{method:'POST',headers:{'content-type':f.type||'application/octet-stream'},body:buf});
+      var toSend=await downscale(f,2048,0.85);
+      var res=await fetch('/catalog/upload-image?seq='+encodeURIComponent(seq),{method:'POST',headers:{'content-type':toSend.type||f.type||'application/octet-stream'},body:toSend});
       var j=await res.json();
       if(res.ok && j.ok){ setStatus('Uploaded ✓ — reloading…'); setTimeout(function(){ location.reload(); }, 600); }
       else { setStatus('Error: '+(j.error||res.status)); }

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import type { Queryable } from '../src/jobs/pg-rows.js';
-import { getQueueRows, renderQueuePage } from '../src/review/queue.js';
+import { getQueueRows, renderQueuePage, bulkApproveInvoices } from '../src/review/queue.js';
 
 const mig = (f: string): string => readFileSync(new URL(`../db/migrations/${f}`, import.meta.url), 'utf8');
 
@@ -51,4 +51,34 @@ test('no auto-refresh once nothing is queued or processing', async () => {
   await db.exec(`insert into invoices (client_id, vendor, invoice_number, status) values ('RE','BVLA','INV-1','done')`);
   const html = renderQueuePage(await getQueueRows(db as unknown as Queryable, 'RE'));
   assert.doesNotMatch(html, /http-equiv="refresh"/);
+});
+
+test('renderQueuePage shows bulk-approve controls + checkboxes only on in_review rows', async () => {
+  const db = await seeded();
+  await db.exec(`insert into invoices (client_id, vendor, invoice_number, status) values
+    ('RE','BVLA','R1','in_review'), ('RE','NEO','D1','done')`);
+  const html = renderQueuePage(await getQueueRows(db as unknown as Queryable, 'RE'));
+  assert.match(html, /id="approvebtn"/); // bulk approve button present (there's an in_review row)
+  assert.equal((html.match(/class="qchk"/g) ?? []).length, 1); // only the in_review row is selectable
+});
+
+test("bulkApproveInvoices flips only this tenant's in_review invoices to importing", async () => {
+  const db = await seeded();
+  await db.exec(`insert into clients (id,name) values ('CX','Client X')`);
+  await db.exec(`insert into invoices (id, client_id, vendor, status) values
+    ('00000000-0000-0000-0000-0000000000a1','RE','BVLA','in_review'),
+    ('00000000-0000-0000-0000-0000000000a2','RE','NEO','done'),
+    ('00000000-0000-0000-0000-0000000000a3','CX','BVLA','in_review')`);
+  const r = await bulkApproveInvoices(db as unknown as Queryable, 'RE', [
+    '00000000-0000-0000-0000-0000000000a1', // RE in_review -> approved
+    '00000000-0000-0000-0000-0000000000a2', // RE done -> skipped
+    '00000000-0000-0000-0000-0000000000a3', // CX (other tenant) -> skipped
+    'not-a-uuid', // malformed -> skipped, not thrown
+  ]);
+  assert.deepEqual(r.approvedIds, ['00000000-0000-0000-0000-0000000000a1']);
+  assert.equal(r.skipped, 3);
+  const st = (await db.query<{ status: string }>(`select status from invoices where id='00000000-0000-0000-0000-0000000000a1'`)).rows[0]!.status;
+  assert.equal(st, 'importing');
+  const cx = (await db.query<{ status: string }>(`select status from invoices where id='00000000-0000-0000-0000-0000000000a3'`)).rows[0]!.status;
+  assert.equal(cx, 'in_review'); // other tenant untouched
 });
