@@ -32,6 +32,32 @@ const cfg = (over: Partial<SquareConfig> = {}): SquareConfig => ({
   ...over,
 });
 
+function sequenceFetch(statuses: number[], payload: unknown): { fetchImpl: typeof globalThis.fetch; calls: () => number } {
+  let i = 0;
+  const fetchImpl = (async () => {
+    const status = statuses[Math.min(i, statuses.length - 1)]!;
+    i++;
+    return { ok: status < 400, status, headers: { get: () => null }, text: async () => JSON.stringify(payload) };
+  }) as unknown as typeof globalThis.fetch;
+  return { fetchImpl, calls: () => i };
+}
+
+test('squareRequest retries on 429 (catalog locked) then succeeds', async () => {
+  const seq = sequenceFetch([429, 429, 200], { ok: true });
+  const r = await squareRequest(cfg({ fetchImpl: seq.fetchImpl, retryBaseMs: 1 }), '/v2/catalog/object', { method: 'POST', body: {} });
+  assert.deepEqual(r, { ok: true });
+  assert.equal(seq.calls(), 3); // two 429s retried, third succeeds
+});
+
+test('squareRequest gives up and throws after maxRetries of 429', async () => {
+  const seq = sequenceFetch([429], {});
+  await assert.rejects(
+    () => squareRequest(cfg({ fetchImpl: seq.fetchImpl, retryBaseMs: 1, maxRetries: 2 }), '/v2/catalog/object', { method: 'POST', body: {} }),
+    /Square 429/,
+  );
+  assert.equal(seq.calls(), 3); // initial + 2 retries
+});
+
 test('squareRequest hits the sandbox host with auth + version headers', async () => {
   let seenUrl = '';
   let seenInit!: { headers: Record<string, string> };

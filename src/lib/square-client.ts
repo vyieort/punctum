@@ -19,6 +19,8 @@ export interface SquareConfig {
   version?: string;
   baseUrl?: string;
   fetchImpl?: typeof globalThis.fetch;
+  maxRetries?: number; // 429/503 retries (default 5)
+  retryBaseMs?: number; // backoff base (default 500)
 }
 
 /** Build config from environment variables (SQUARE_ACCESS_TOKEN / SQUARE_ENV / SQUARE_LOCATION_ID). */
@@ -36,21 +38,33 @@ export async function squareRequest(
 ): Promise<any> {
   const base = cfg.baseUrl ?? BASE_URLS[cfg.env];
   const doFetch = cfg.fetchImpl ?? globalThis.fetch;
-  const res = await doFetch(base + path, {
-    method: opts.method,
-    headers: {
-      authorization: `Bearer ${cfg.token}`,
-      'square-version': cfg.version ?? '2026-01-22',
-      'content-type': 'application/json',
-    },
-    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-  });
-  const text = await res.text();
-  const json = text ? JSON.parse(text) : {};
-  if (!res.ok) {
-    throw new Error(`Square ${res.status} ${path}: ${JSON.stringify(json.errors ?? json).slice(0, 400)}`);
+  const maxRetries = cfg.maxRetries ?? 5;
+  const retryBaseMs = cfg.retryBaseMs ?? 500;
+  for (let attempt = 0; ; attempt++) {
+    const res = await doFetch(base + path, {
+      method: opts.method,
+      headers: {
+        authorization: `Bearer ${cfg.token}`,
+        'square-version': cfg.version ?? '2026-01-22',
+        'content-type': 'application/json',
+      },
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+    });
+    // Retry on 429 (rate limit / "Catalog locked by prior request") and 503, honoring Retry-After.
+    // All our writes carry idempotency keys, so a retry is a safe no-op on Square's side.
+    if ((res.status === 429 || res.status === 503) && attempt < maxRetries) {
+      const ra = Number(res.headers?.get?.('retry-after'));
+      const waitMs = Number.isFinite(ra) && ra > 0 ? ra * 1000 : Math.min(8000, retryBaseMs * 2 ** attempt);
+      await new Promise((r) => setTimeout(r, waitMs));
+      continue;
+    }
+    const text = await res.text();
+    const json = text ? JSON.parse(text) : {};
+    if (!res.ok) {
+      throw new Error(`Square ${res.status} ${path}: ${JSON.stringify(json.errors ?? json).slice(0, 400)}`);
+    }
+    return json;
   }
-  return json;
 }
 
 export async function listLocations(cfg: SquareConfig): Promise<Array<{ id: string; name: string }>> {

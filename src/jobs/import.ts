@@ -172,7 +172,24 @@ async function resolveExistingByName(
   return { itemId, varIdByName };
 }
 
-export async function runImport(
+// Serialize Square-writing imports process-wide. Square locks the catalog per write, so concurrent
+// imports (several invoices approved at once, each firing a background push) collide with a 429
+// "Catalog locked by prior request." This chain runs them strictly one at a time.
+let importChain: Promise<unknown> = Promise.resolve();
+function withImportLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = importChain.then(fn, fn);
+  importChain = run.then(
+    () => {},
+    () => {},
+  );
+  return run;
+}
+
+export function runImport(db: Queryable, invoiceId: string, opts: ImportOptions = {}): Promise<ImportResult> {
+  return withImportLock(() => runImportInner(db, invoiceId, opts));
+}
+
+async function runImportInner(
   db: Queryable,
   invoiceId: string,
   opts: ImportOptions = {},
