@@ -9,12 +9,12 @@
 
 import type { Queryable } from './pg-rows.js';
 import {
-  squareConfigFromEnv,
   searchItemByName,
   upsertCatalogObject,
   batchChangeInventory,
   type SquareConfig,
 } from '../lib/square-client.js';
+import { loadSquareConfig } from '../lib/square-account.js';
 import { loadClassifiedProducts, loadPricingRules, loadCategoryMap } from './import-preview.js';
 import { toImportLines } from '../lib/import-map.js';
 import {
@@ -194,19 +194,21 @@ async function runImportInner(
   invoiceId: string,
   opts: ImportOptions = {},
 ): Promise<ImportResult> {
-  let ops = opts.ops;
-  let locationId = opts.locationId;
-  if (!ops) {
-    const cfg = squareConfigFromEnv();
-    ops = liveSquareOps(cfg);
-    locationId = locationId ?? cfg.locationId;
-  }
-  if (!locationId) throw new Error('runImport: no Square location id');
-
   const inv = await db.query(`select client_id, vendor, created_at from invoices where id = $1`, [invoiceId]);
   if (inv.rows.length === 0) throw new Error(`invoice ${invoiceId} not found`);
   const clientId = String((inv.rows[0] as { client_id: string }).client_id);
   const vendor = String((inv.rows[0] as { vendor: string | null }).vendor ?? '');
+
+  // Square ops come from the connected tenant's stored OAuth token; loadSquareConfig falls back to
+  // env for RE (client #1), so imports keep working before any tenant has connected via OAuth.
+  let ops = opts.ops;
+  let locationId = opts.locationId;
+  if (!ops) {
+    const cfg = await loadSquareConfig(db, clientId);
+    ops = liveSquareOps(cfg);
+    locationId = locationId ?? cfg.locationId;
+  }
+  if (!locationId) throw new Error('runImport: no Square location id');
   // Inventory occurred_at must be DETERMINISTIC per invoice: the inventory idempotency key is
   // stable (invoice+sku), so a retry has to send identical data or Square rejects it with
   // IDEMPOTENCY_KEY_REUSED. Deriving it from the invoice's created_at (not new Date()) makes a

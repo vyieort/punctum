@@ -16,7 +16,7 @@ import { handleReview } from './review/handler.js';
 import { ingestInvoice, queueInvoice, requeueErrored } from './jobs/intake.js';
 import { startWorker } from './jobs/worker.js';
 import { getQueueRows, renderQueuePage, bulkApproveInvoices } from './review/queue.js';
-import { squareConfigFromEnv, listLocations } from './lib/square-client.js';
+import { listLocations, getItemImageUrl } from './lib/square-client.js';
 import { previewInvoiceImport } from './jobs/import-preview.js';
 import { provisionCategories } from './jobs/provision-categories.js';
 import { runComparison } from './jobs/compare.js';
@@ -26,7 +26,7 @@ import { parseSquareLibraryXlsx } from './lib/library-import.js';
 import { seedLibrary } from './jobs/library-seed.js';
 import { syncLibraryItemIds } from './jobs/library-sync.js';
 import { enrichImages } from './jobs/enrich-images.js';
-import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, clearVariationImage, setItemImageFromRow, uploadVariationImage } from './review/catalog.js';
+import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, clearVariationImage, setItemImageFromRow, uploadVariationImage, uploadItemImage, clearItemImageForItem } from './review/catalog.js';
 import { getItemDetail, renderItemPage, getVariationDetail, renderVariationPage } from './review/item-detail.js';
 import { applyEdits, getEditPatterns, getCategoryPaths, clearEdits, type RowEdit } from './review/catalog-edit.js';
 import { renderPatternsPage } from './review/patterns-page.js';
@@ -35,7 +35,7 @@ import { getClientSettings, setAutoEnrichImages } from './lib/client-settings.js
 import { renderSettingsPage } from './review/settings-page.js';
 import { randomUUID } from 'node:crypto';
 import { oauthConfigFromEnv, squareAuthorizeUrl, exchangeCode } from './auth/square-oauth.js';
-import { saveSquareAccount, getSquareConnection } from './lib/square-account.js';
+import { saveSquareAccount, getSquareConnection, loadSquareConfig } from './lib/square-account.js';
 import { passwordLogin, refreshSession } from './auth/gotrue.js';
 import { getUser, getSession, verifyAccessToken, ACCESS_COOKIE, REFRESH_COOKIE } from './auth/session.js';
 import { resolveClientForUser, parseCookies } from './auth/tenant.js';
@@ -904,17 +904,63 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // Upload the studio's own photo as the ITEM's primary (grid) image (item detail page).
+  if (url.pathname === '/catalog/upload-item-image' && req.method === 'POST') {
+    const client = authedClient;
+    const itemId = url.searchParams.get('item');
+    if (!itemId) {
+      sendJson(res, 400, { error: "missing required query param: 'item'" });
+      return;
+    }
+    try {
+      const bytes = await readBodyBuffer(req);
+      const contentType = req.headers['content-type'] ?? 'application/octet-stream';
+      const result = await uploadItemImage(getPool() as unknown as Queryable, client, itemId, { bytes, contentType });
+      sendJson(res, result.ok ? 200 : 400, result);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  // Clear the item's own primary image (item detail page).
+  if (url.pathname === '/catalog/clear-item-image' && req.method === 'POST') {
+    const client = authedClient;
+    const itemId = url.searchParams.get('item');
+    if (!itemId) {
+      sendJson(res, 400, { error: "missing required query param: 'item'" });
+      return;
+    }
+    try {
+      const result = await clearItemImageForItem(getPool() as unknown as Queryable, client, itemId);
+      sendJson(res, result.ok ? 200 : 404, result);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
   // Item detail page: one product, its variations, and per-variation photo upload.
   const itemParts = url.pathname.split('/').filter(Boolean);
   if (itemParts[0] === 'items' && itemParts.length === 2 && req.method === 'GET') {
     try {
-      const item = await getItemDetail(getPool() as unknown as Queryable, authedClient, decodeURIComponent(itemParts[1]!));
+      const itemId = decodeURIComponent(itemParts[1]!);
+      const item = await getItemDetail(getPool() as unknown as Queryable, authedClient, itemId);
       if (!item) {
         sendJson(res, 404, { error: 'item not found' });
         return;
       }
+      // The item's true primary image (may be an item-only upload not tied to any variation).
+      // Best-effort: a Square hiccup just falls back to the variation-derived hero in the renderer.
+      let itemImageUrl = '';
+      try {
+        const cfg = await loadSquareConfig(getPool() as unknown as Queryable, authedClient);
+        itemImageUrl = await getItemImageUrl(cfg, itemId);
+      } catch {
+        /* fall back to variation-derived hero */
+      }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(renderItemPage(item));
+      res.end(renderItemPage(item, itemImageUrl));
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }
@@ -1028,7 +1074,8 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST') {
       const client = authedClient;
       try {
-        const result = await provisionCategories(squareConfigFromEnv(), getPool() as unknown as Queryable, client);
+        const cfg = await loadSquareConfig(getPool() as unknown as Queryable, client);
+        const result = await provisionCategories(cfg, getPool() as unknown as Queryable, client);
         sendJson(res, 200, { client, created: result.created });
       } catch (err) {
         sendJson(res, 500, { error: (err as Error).message });
@@ -1040,7 +1087,7 @@ const server = createServer(async (req, res) => {
   // Read-only credential check: confirm the Square token + host reach the sandbox.
   if (url.pathname === '/square/verify' && req.method === 'GET') {
     try {
-      const cfg = squareConfigFromEnv();
+      const cfg = await loadSquareConfig(getPool() as unknown as Queryable, authedClient);
       const locations = await listLocations(cfg);
       const configuredLocationValid = locations.some((l) => l.id === cfg.locationId);
       sendJson(res, 200, {

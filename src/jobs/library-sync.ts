@@ -6,7 +6,8 @@
 // Square ops are injected so it's unit-testable with a fake catalog (no live call in tests).
 
 import type { Queryable } from './pg-rows.js';
-import { squareConfigFromEnv, listCatalogItems } from '../lib/square-client.js';
+import { listCatalogItems } from '../lib/square-client.js';
+import { loadSquareConfig } from '../lib/square-account.js';
 
 interface CatalogItem {
   id?: string;
@@ -28,7 +29,7 @@ export async function syncLibraryItemIds(
   clientId: string,
   opts: { ops?: LibrarySyncOps } = {},
 ): Promise<LibrarySyncResult> {
-  const ops = opts.ops ?? { listItems: () => listCatalogItems(squareConfigFromEnv()) };
+  const ops = opts.ops ?? { listItems: async () => listCatalogItems(await loadSquareConfig(db, clientId)) };
   const items = await ops.listItems();
 
   const itemByVariation = new Map<string, string>();

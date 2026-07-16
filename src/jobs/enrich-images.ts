@@ -8,7 +8,6 @@
 
 import type { Queryable } from './pg-rows.js';
 import {
-  squareConfigFromEnv,
   getVariationImageIds,
   getItemImageIds,
   setItemImage,
@@ -21,6 +20,7 @@ import { searchImages, type ImageCandidate } from '../lib/serpapi.js';
 import { scoreImages, type VisionResult } from '../lib/vision.js';
 import { buildImageQuery } from '../lib/image-query.js';
 import { getClientSettings } from '../lib/client-settings.js';
+import { loadSquareConfig } from '../lib/square-account.js';
 
 export interface EnrichOps {
   search(query: string): Promise<ImageCandidate[]>;
@@ -94,7 +94,7 @@ export async function enrichImages(db: Queryable, clientId: string, opts: Enrich
   if (!(await getClientSettings(db, clientId)).autoEnrichImages) {
     return { processed: 0, enriched: 0, noImage: 0, skipped: 0, errors: [], disabled: true };
   }
-  const ops = opts.ops ?? liveEnrichOps(squareConfigFromEnv());
+  const ops = opts.ops ?? liveEnrichOps(await loadSquareConfig(db, clientId));
   const limit = opts.limit ?? 20;
 
   const { rows } = await db.query(

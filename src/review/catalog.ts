@@ -6,15 +6,17 @@
 
 import type { Queryable } from '../jobs/pg-rows.js';
 import {
-  squareConfigFromEnv,
   deleteCatalogObject,
   downloadImage,
   attachVariationImage,
   setItemImage,
+  clearItemImage,
+  getItemImageIds,
   isAllowedImageType,
   type SquareConfig,
 } from '../lib/square-client.js';
 import { normalizeUploadedImage } from '../lib/image-normalize.js';
+import { loadSquareConfig } from '../lib/square-account.js';
 
 export interface CatalogRow {
   seq: string;
@@ -548,6 +550,8 @@ export interface ImageEditOps {
   download(url: string): Promise<{ bytes: Buffer; contentType: string }>;
   attach(opts: { variationId: string; itemName: string; bytes: Buffer; contentType?: string; sourceUrl?: string }): Promise<{ imageId: string; url: string }>;
   setItemImage(itemId: string, imageId: string): Promise<void>;
+  itemImageIds(itemId: string): Promise<string[]>;
+  clearItemImage(itemId: string): Promise<void>;
 }
 
 /** Download the first URL that is a Square-allowed image type (full-size, then thumbnail). */
@@ -573,6 +577,8 @@ export function liveImageEditOps(cfg: SquareConfig): ImageEditOps {
     download: (url) => downloadImage(url),
     attach: (o) => attachVariationImage(cfg, o),
     setItemImage: (itemId, imageId) => setItemImage(cfg, itemId, imageId),
+    itemImageIds: (itemId) => getItemImageIds(cfg, itemId),
+    clearItemImage: (itemId) => clearItemImage(cfg, itemId),
   };
 }
 
@@ -583,7 +589,7 @@ export async function setItemImageFromRow(
   seq: string,
   opts: { ops?: ImageEditOps } = {},
 ): Promise<{ ok: boolean }> {
-  const ops = opts.ops ?? liveImageEditOps(squareConfigFromEnv());
+  const ops = opts.ops ?? liveImageEditOps(await loadSquareConfig(db, clientId));
   const { rows } = await db.query(
     `select square_item_id, square_image_id from catalog_mapping where client_id = $1 and seq = $2`,
     [clientId, seq],
@@ -592,6 +598,62 @@ export async function setItemImageFromRow(
   const row = rows[0] as { square_item_id: string | null; square_image_id: string | null };
   if (!row.square_item_id || !row.square_image_id) return { ok: false };
   await ops.setItemImage(row.square_item_id, row.square_image_id);
+  return { ok: true };
+}
+
+/**
+ * Upload an operator photo as the ITEM's own primary (grid) image — the item-page equivalent of
+ * uploadVariationImage, but the image is attached to the item object itself, not a variation, so
+ * it's independent of any variation's photo. Old item image objects are deleted after the new one
+ * is set, so re-uploading doesn't orphan images.
+ */
+export async function uploadItemImage(
+  db: Queryable,
+  clientId: string,
+  itemId: string,
+  file: { bytes: Buffer; contentType: string },
+  opts: { ops?: ImageEditOps } = {},
+): Promise<{ ok: boolean; error?: string; url?: string }> {
+  if (file.bytes.length === 0) return { ok: false, error: 'empty upload' };
+  const norm = await normalizeUploadedImage(file.bytes, file.contentType);
+  if (!isAllowedImageType(norm.contentType)) {
+    return { ok: false, error: `unsupported image type: ${file.contentType || 'unknown'}` };
+  }
+  const ops = opts.ops ?? liveImageEditOps(await loadSquareConfig(db, clientId));
+
+  // Item name (for the Square image caption) — any row of this item carries it.
+  const { rows } = await db.query(
+    `select item_name from catalog_mapping where client_id = $1 and square_item_id = $2 limit 1`,
+    [clientId, itemId],
+  );
+  if (rows.length === 0) return { ok: false, error: 'item not found' };
+  const itemName = stripTagSuffix(String((rows[0] as { item_name: string | null }).item_name ?? ''));
+
+  const oldIds = await ops.itemImageIds(itemId).catch(() => [] as string[]);
+  // attach() posts object_id = variationId; passing the itemId attaches the image to the item.
+  const attached = await ops.attach({
+    variationId: itemId,
+    itemName,
+    bytes: norm.bytes,
+    contentType: norm.contentType,
+    sourceUrl: `itemupload:${itemId}:${Date.now()}`,
+  });
+  await ops.setItemImage(itemId, attached.imageId);
+  for (const old of oldIds) if (old !== attached.imageId) await ops.deleteImage(old).catch(() => {});
+  return { ok: true, url: attached.url };
+}
+
+/** Remove the item's own primary image (and delete the underlying image objects). */
+export async function clearItemImageForItem(
+  db: Queryable,
+  clientId: string,
+  itemId: string,
+  opts: { ops?: ImageEditOps } = {},
+): Promise<{ ok: boolean }> {
+  const ops = opts.ops ?? liveImageEditOps(await loadSquareConfig(db, clientId));
+  const oldIds = await ops.itemImageIds(itemId).catch(() => [] as string[]);
+  await ops.clearItemImage(itemId);
+  for (const old of oldIds) await ops.deleteImage(old).catch(() => {});
   return { ok: true };
 }
 
@@ -629,7 +691,7 @@ export async function setVariationImage(
   thumbUrl: string,
   opts: { ops?: ImageEditOps } = {},
 ): Promise<{ ok: boolean }> {
-  const ops = opts.ops ?? liveImageEditOps(squareConfigFromEnv());
+  const ops = opts.ops ?? liveImageEditOps(await loadSquareConfig(db, clientId));
   const { rows } = await db.query(
     `select square_variation_id, item_name, square_image_id from catalog_mapping where client_id = $1 and seq = $2`,
     [clientId, seq],
@@ -676,7 +738,7 @@ export async function uploadVariationImage(
   if (!isAllowedImageType(norm.contentType)) {
     return { ok: false, error: `unsupported image type: ${file.contentType || 'unknown'}` };
   }
-  const ops = opts.ops ?? liveImageEditOps(squareConfigFromEnv());
+  const ops = opts.ops ?? liveImageEditOps(await loadSquareConfig(db, clientId));
   const { rows } = await db.query(
     `select square_variation_id, square_item_id, item_name, square_image_id
        from catalog_mapping where client_id = $1 and seq = $2`,
@@ -710,7 +772,7 @@ export async function clearVariationImage(
   seq: string,
   opts: { ops?: ImageEditOps } = {},
 ): Promise<{ ok: boolean }> {
-  const ops = opts.ops ?? liveImageEditOps(squareConfigFromEnv());
+  const ops = opts.ops ?? liveImageEditOps(await loadSquareConfig(db, clientId));
   const { rows } = await db.query(
     `select square_image_id from catalog_mapping where client_id = $1 and seq = $2`,
     [clientId, seq],

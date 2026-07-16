@@ -12,8 +12,9 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Queryable } from '../jobs/pg-rows.js';
-import { squareConfigFromEnv, getCatalogObject, upsertCatalogObject, type SquareConfig } from '../lib/square-client.js';
+import { getCatalogObject, upsertCatalogObject, type SquareConfig } from '../lib/square-client.js';
 import { loadCategoryMap } from '../jobs/import-preview.js';
+import { loadSquareConfig } from '../lib/square-account.js';
 
 export interface RowEdit {
   seq: string;
@@ -97,7 +98,7 @@ export async function applyEdits(
   edits: RowEdit[],
   opts: { ops?: EditPushOps } = {},
 ): Promise<ApplyEditsResult> {
-  const ops = opts.ops ?? liveEditPushOps(squareConfigFromEnv());
+  const ops = opts.ops ?? liveEditPushOps(await loadSquareConfig(db, clientId));
   const categoryMap = await loadCategoryMap(db, clientId); // path -> square_category_id
   const result: ApplyEditsResult = { rowsChanged: 0, fieldsChanged: 0, pushed: 0, errors: [] };
 

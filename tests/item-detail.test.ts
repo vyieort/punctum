@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import type { Queryable } from '../src/jobs/pg-rows.js';
-import { uploadVariationImage, type ImageEditOps } from '../src/review/catalog.js';
+import { uploadVariationImage, uploadItemImage, clearItemImageForItem, type ImageEditOps } from '../src/review/catalog.js';
 import { getItemDetail, renderItemPage, getVariationDetail, renderVariationPage } from '../src/review/item-detail.js';
 
 const mig = (f: string): string => readFileSync(new URL(`../db/migrations/${f}`, import.meta.url), 'utf8');
@@ -24,13 +24,15 @@ async function seeded(): Promise<PGlite> {
   return db;
 }
 
-function fakeOps() {
-  const calls: { deleted: string[]; attached: Array<{ variationId: string; bytes: number; ct?: string }>; itemSet: Array<[string, string]> } = { deleted: [], attached: [], itemSet: [] };
+function fakeOps(existingItemImages: string[] = []) {
+  const calls: { deleted: string[]; attached: Array<{ variationId: string; bytes: number; ct?: string }>; itemSet: Array<[string, string]>; itemCleared: string[] } = { deleted: [], attached: [], itemSet: [], itemCleared: [] };
   const ops: ImageEditOps = {
     deleteImage: async (id) => { calls.deleted.push(id); },
     download: async () => ({ bytes: Buffer.from(''), contentType: 'image/jpeg' }),
     attach: async (o) => { calls.attached.push({ variationId: o.variationId, bytes: o.bytes.length, ct: o.contentType }); return { imageId: 'IMG_NEW', url: 'https://sq/new.jpg' }; },
     setItemImage: async (itemId, imageId) => { calls.itemSet.push([itemId, imageId]); },
+    itemImageIds: async () => existingItemImages.slice(),
+    clearItemImage: async (itemId) => { calls.itemCleared.push(itemId); },
   };
   return { ops, calls };
 }
@@ -85,6 +87,44 @@ test('getItemDetail groups variations under one item; renderItemPage shows uploa
   assert.match(html, /type="file"/); // per-variation upload control
   assert.match(html, /\/variations\//); // links down to variation detail
   assert.match(html, /← Catalog/); // breadcrumb up
+});
+
+test('renderItemPage shows item-photo controls and uses the item image as hero when provided', async () => {
+  const db = await seeded();
+  const item = await getItemDetail(db as unknown as Queryable, 'RE', 'ITEM1');
+  const html = renderItemPage(item!, 'https://sq/itemhero.jpg');
+  assert.match(html, /id="itemfile"/); // item-level upload control
+  assert.match(html, /upload-item-image/); // wired to the item photo route
+  assert.match(html, /https:\/\/sq\/itemhero\.jpg/); // item image wins over variation-derived hero
+});
+
+test('uploadItemImage attaches to the item object, sets it primary, and deletes the old item image', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  const { ops, calls } = fakeOps(['IMG_ITEM_OLD']);
+  const r = await uploadItemImage(q, 'RE', 'ITEM1', { bytes: Buffer.from('JPEGDATA'), contentType: 'image/jpeg' }, { ops });
+  assert.equal(r.ok, true);
+  assert.equal(calls.attached.length, 1);
+  assert.equal(calls.attached[0]!.variationId, 'ITEM1'); // object_id is the item, not a variation
+  assert.deepEqual(calls.itemSet, [['ITEM1', 'IMG_NEW']]); // new image made primary
+  assert.deepEqual(calls.deleted, ['IMG_ITEM_OLD']); // prior item image removed, no orphan
+});
+
+test('uploadItemImage rejects a non-image type', async () => {
+  const db = await seeded();
+  const { ops } = fakeOps();
+  const r = await uploadItemImage(db as unknown as Queryable, 'RE', 'ITEM1', { bytes: Buffer.from('%PDF'), contentType: 'application/pdf' }, { ops });
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? '', /unsupported/);
+});
+
+test('clearItemImageForItem clears the primary and deletes the underlying image objects', async () => {
+  const db = await seeded();
+  const { ops, calls } = fakeOps(['IMG_A', 'IMG_B']);
+  const r = await clearItemImageForItem(db as unknown as Queryable, 'RE', 'ITEM1', { ops });
+  assert.equal(r.ok, true);
+  assert.deepEqual(calls.itemCleared, ['ITEM1']);
+  assert.deepEqual(calls.deleted, ['IMG_A', 'IMG_B']);
 });
 
 test('getVariationDetail + renderVariationPage show one SKU with editable fields', async () => {

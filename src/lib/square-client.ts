@@ -148,6 +148,30 @@ export async function setItemImage(cfg: SquareConfig, itemId: string, imageId: s
   });
 }
 
+/** Clear an item's primary (grid) image. Read-modify-write of the full item so variations and
+ *  every other field are preserved; only image_ids is emptied. */
+export async function clearItemImage(cfg: SquareConfig, itemId: string): Promise<void> {
+  const got = await squareRequest(cfg, `/v2/catalog/object/${itemId}`, { method: 'GET' });
+  const obj = got.object;
+  if (!obj) throw new Error(`item ${itemId} not found`);
+  obj.item_data = obj.item_data ?? {};
+  obj.item_data.image_ids = [];
+  await squareRequest(cfg, '/v2/catalog/object', {
+    method: 'POST',
+    body: { idempotency_key: `${itemId}-itemimg-clear-${Date.now()}`, object: obj },
+  });
+}
+
+/** The item's current primary image URL (image_ids[0] resolved to its hosted URL), or '' if none.
+ *  Two GETs (item, then image) — fine for an admin page render; best-effort at the call site. */
+export async function getItemImageUrl(cfg: SquareConfig, itemId: string): Promise<string> {
+  const got = await squareRequest(cfg, `/v2/catalog/object/${itemId}`, { method: 'GET' });
+  const imageId = got.object?.item_data?.image_ids?.[0];
+  if (!imageId) return '';
+  const img = await squareRequest(cfg, `/v2/catalog/object/${imageId}`, { method: 'GET' });
+  return img.object?.image_data?.url ?? '';
+}
+
 /** Content types Square accepts for a catalog image. */
 const ALLOWED_IMAGE_TYPE = /^image\/(jpeg|pjpeg|png|x-png|gif)/i;
 export function isAllowedImageType(contentType: string): boolean {

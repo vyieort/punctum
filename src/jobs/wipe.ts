@@ -6,7 +6,8 @@
 // services as collateral. Categories are left intact so re-provisioning isn't needed.
 
 import type { Queryable } from './pg-rows.js';
-import { squareConfigFromEnv, listCatalogItems, batchDeleteObjects, type SquareConfig } from '../lib/square-client.js';
+import { listCatalogItems, batchDeleteObjects, type SquareConfig } from '../lib/square-client.js';
+import { loadSquareConfig } from '../lib/square-account.js';
 
 export interface WipeResult {
   env: string;
@@ -35,7 +36,7 @@ export async function wipeSandboxCatalog(
   clientId: string,
   opts: { ops?: WipeOps; clearInvoices?: boolean } = {},
 ): Promise<WipeResult> {
-  const ops = opts.ops ?? liveWipeOps(squareConfigFromEnv());
+  const ops = opts.ops ?? liveWipeOps(await loadSquareConfig(db, clientId));
 
   // Hard guard: never wipe a production catalog (or, below, production invoices).
   if (ops.env === 'production') {

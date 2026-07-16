@@ -5,8 +5,9 @@
 // (an operator's grid edit already lives in Square, so this stays consistent with it).
 
 import type { Queryable } from './pg-rows.js';
-import { squareConfigFromEnv, listCatalogItems } from '../lib/square-client.js';
+import { listCatalogItems } from '../lib/square-client.js';
 import { loadCategoryMap } from './import-preview.js';
+import { loadSquareConfig } from '../lib/square-account.js';
 
 interface CatalogItem {
   id?: string;
@@ -28,7 +29,7 @@ export async function syncCategoryPaths(
   clientId: string,
   opts: { ops?: CategorySyncOps } = {},
 ): Promise<CategorySyncResult> {
-  const ops = opts.ops ?? { listItems: () => listCatalogItems(squareConfigFromEnv()) };
+  const ops = opts.ops ?? { listItems: async () => listCatalogItems(await loadSquareConfig(db, clientId)) };
   const categoryMap = await loadCategoryMap(db, clientId); // path -> id
   const pathById = new Map<string, string>();
   for (const [path, id] of categoryMap) if (!pathById.has(id)) pathById.set(id, path);

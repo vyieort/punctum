@@ -210,8 +210,10 @@ if(cl) cl.addEventListener('click', async function(){
 </body></html>`;
 }
 
-export function renderItemPage(item: ItemDetail): string {
-  const hero = item.variations.find((v) => v.imageUrl)?.imageUrl ?? '';
+export function renderItemPage(item: ItemDetail, itemImageUrl = ''): string {
+  // Prefer the item's true primary image (which may be an item-only upload); fall back to the
+  // first variation that has a photo so the page still shows something before any item image is set.
+  const hero = itemImageUrl || (item.variations.find((v) => v.imageUrl)?.imageUrl ?? '');
   const rows = item.variations
     .map((v) => {
       const color = STATUS_COLOR[v.status] ?? '#6b7280';
@@ -244,6 +246,9 @@ export function renderItemPage(item: ItemDetail): string {
   .head{display:flex;gap:1rem;align-items:flex-start;margin-bottom:1rem}
   .heroimg{width:120px;height:120px;object-fit:cover;border-radius:8px;border:1px solid #e5e7eb;background:#f3f4f6}
   .heroempty{width:120px;height:120px;display:flex;align-items:center;justify-content:center;color:#9ca3af;border:1px dashed #d1d5db;border-radius:8px;font-size:12px;text-align:center}
+  .herocol{flex:0 0 120px;text-align:center}
+  .herobtns{margin-top:.4rem;display:flex;gap:.35rem;justify-content:center;flex-wrap:wrap}
+  .clr{border:1px solid #b45309;color:#b45309;background:#fff;font-size:12px;padding:.25rem .6rem;border-radius:6px;cursor:pointer}
   .desc{color:#374151;font-size:14px}
   table{border-collapse:collapse;width:100%;font-size:13px;margin-top:.5rem}
   th,td{border-bottom:1px solid #eee;padding:.5rem .6rem;text-align:left;vertical-align:middle}
@@ -260,7 +265,13 @@ export function renderItemPage(item: ItemDetail): string {
   <h2>${esc(item.itemName)}</h2>
   <div class="meta">${esc(item.vendor)}${item.categoryPath ? ' · ' + esc(item.categoryPath) : ''}${item.tags ? ' · <code>' + esc(item.tags) + '</code>' : ''}</div>
   <div class="head">
-    ${hero ? `<img class="heroimg" src="${esc(hero)}" alt="">` : '<div class="heroempty">no image yet</div>'}
+    <div class="herocol">
+      ${hero ? `<img class="heroimg" src="${esc(hero)}" alt="">` : '<div class="heroempty">no image yet</div>'}
+      <div class="herobtns">
+        <label class="up">${hero ? 'Replace photo' : 'Upload photo'}<input type="file" id="itemfile" accept="image/*,.heic,.heif" hidden></label>
+        ${hero ? '<button class="clr" id="itemclear">Remove</button>' : ''}
+      </div>
+    </div>
     <div class="desc">${esc(item.description) || '<span style="color:#9ca3af">No description.</span>'}</div>
   </div>
   <div id="status"></div>
@@ -279,7 +290,7 @@ function downscale(file, maxPx, quality){
     img.src=url;
   });
 }
-document.querySelectorAll('input[type=file]').forEach(function(inp){
+document.querySelectorAll('input[type=file][data-seq]').forEach(function(inp){
   inp.addEventListener('change', async function(){
     if(!inp.files || !inp.files[0]) return;
     var f=inp.files[0], seq=inp.getAttribute('data-seq');
@@ -302,6 +313,30 @@ document.querySelectorAll('.asitem').forEach(function(b){
       else { setStatus('Error '+res.status); b.disabled=false; }
     }catch(e){ setStatus('Error: '+e.message); b.disabled=false; }
   });
+});
+var ITEMID=${JSON.stringify(item.itemId)};
+var itemFile=document.getElementById('itemfile');
+if(itemFile) itemFile.addEventListener('change', async function(){
+  if(!itemFile.files || !itemFile.files[0]) return;
+  var f=itemFile.files[0];
+  setStatus('Uploading item photo '+f.name+'…');
+  try{
+    var toSend=await downscale(f,2048,0.85);
+    var res=await fetch('/catalog/upload-item-image?item='+encodeURIComponent(ITEMID),{method:'POST',headers:{'content-type':toSend.type||f.type||'application/octet-stream'},body:toSend});
+    var j=await res.json();
+    if(res.ok && j.ok){ setStatus('Item photo updated ✓ — reloading…'); setTimeout(function(){ location.reload(); }, 600); }
+    else { setStatus('Error: '+(j.error||res.status)); }
+  }catch(e){ setStatus('Error: '+e.message); }
+});
+var itemClear=document.getElementById('itemclear');
+if(itemClear) itemClear.addEventListener('click', async function(){
+  if(!confirm('Remove the item photo?')) return;
+  itemClear.disabled=true; setStatus('Removing item photo…');
+  try{
+    var res=await fetch('/catalog/clear-item-image?item='+encodeURIComponent(ITEMID),{method:'POST'});
+    if(res.ok){ setStatus('Removed — reloading…'); setTimeout(function(){ location.reload(); }, 500); }
+    else { setStatus('Error '+res.status); itemClear.disabled=false; }
+  }catch(e){ setStatus('Error: '+e.message); itemClear.disabled=false; }
 });
 </script>
 </body></html>`;

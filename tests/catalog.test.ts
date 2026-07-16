@@ -52,6 +52,8 @@ function fakeEditOps() {
       return { imageId: 'IMG_NEW', url: 'https://sq/new.jpg' };
     },
     setItemImage: async (itemId, imageId) => void calls.itemImageSet.push(itemId + ':' + imageId),
+    itemImageIds: async () => [],
+    clearItemImage: async () => {},
   };
   return { ops, calls };
 }
