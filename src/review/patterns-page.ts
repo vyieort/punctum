@@ -76,7 +76,7 @@ export function renderPatternsPage(r: EditPatternsReport): string {
     if(!confirm('Clear the correction log? Use this to discard test edits. It does not change anything in Square.')) return;
     var b=this, s=document.getElementById('clearstatus'); b.disabled=true; s.textContent='Clearing…';
     try{
-      var res=await fetch('/catalog/edits/clear?client=RE',{method:'POST'});
+      var res=await fetch('/catalog/edits/clear',{method:'POST'});
       var j=await res.json();
       if(res.ok){ s.textContent='Cleared '+j.cleared+' — reloading…'; setTimeout(function(){ location.reload(); }, 500); }
       else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }

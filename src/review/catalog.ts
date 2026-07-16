@@ -302,7 +302,7 @@ document.querySelectorAll('.useitem').forEach(function(b){
   b.addEventListener('click', async function(){
     var t=b.textContent; b.disabled=true; b.textContent='…';
     try{
-      var r=await fetch('/catalog/set-item-image?client=RE&seq='+encodeURIComponent(b.getAttribute('data-seq')),{method:'POST'});
+      var r=await fetch('/catalog/set-item-image?seq='+encodeURIComponent(b.getAttribute('data-seq')),{method:'POST'});
       if(r.ok){ b.textContent='✓ item'; } else { b.disabled=false; b.textContent=t; alert('Error '+r.status); }
     }catch(e){ b.disabled=false; b.textContent=t; alert(e.message); }
   });
@@ -312,7 +312,7 @@ document.querySelectorAll('.alts').forEach(function(b){
     activeSeq=b.getAttribute('data-seq'); activeTr=b.closest('tr'); activeCap=b.getAttribute('data-cap');
     b.disabled=true; b.textContent='…';
     try{
-      var res=await fetch('/catalog/candidates?client=RE&seq='+encodeURIComponent(activeSeq));
+      var res=await fetch('/catalog/candidates?seq='+encodeURIComponent(activeSeq));
       var j=await res.json();
       renderGallery(j.candidates||[]); setActive(activeTr);
     }catch(e){ alert(e.message); }
@@ -362,7 +362,7 @@ function showFull(c){
 async function useImage(c, btn){
   if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
   try{
-    var res=await fetch('/catalog/set-image?client=RE&seq='+encodeURIComponent(activeSeq)+'&url='+encodeURIComponent(c.pushUrl)+'&thumb='+encodeURIComponent(c.thumb||''),{method:'POST'});
+    var res=await fetch('/catalog/set-image?seq='+encodeURIComponent(activeSeq)+'&url='+encodeURIComponent(c.pushUrl)+'&thumb='+encodeURIComponent(c.thumb||''),{method:'POST'});
     var j=await res.json().catch(function(){ return {}; });
     if(res.ok){ updateRowThumb(activeTr, j.url||c.pushUrl); closeGallery(); }
     else { if(btn){ btn.disabled=false; btn.textContent='Use as image'; } alert('Error '+(j.error||res.status)); }
@@ -396,7 +396,7 @@ function closeGallery(){
 async function clearImg(){
   var seq=activeSeq, tr=activeTr;
   try{
-    var res=await fetch('/catalog/clear-image?client=RE&seq='+encodeURIComponent(seq),{method:'POST'});
+    var res=await fetch('/catalog/clear-image?seq='+encodeURIComponent(seq),{method:'POST'});
     if(res.ok){
       if(tr){
         var th=tr.querySelector('.thumb'); if(th){ var d=document.createElement('span'); d.className='nothumb'; d.textContent='—'; th.replaceWith(d); }
@@ -455,7 +455,7 @@ document.getElementById('pushbtn').addEventListener('click', async function(){
   var btn=document.getElementById('pushbtn'), st=document.getElementById('pushstatus');
   btn.disabled=true; st.textContent='Pushing '+edits.length+' row(s) to Square…';
   try{
-    var res=await fetch('/catalog/edits?client=RE',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({edits:edits})});
+    var res=await fetch('/catalog/edits',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({edits:edits})});
     var j=await res.json();
     if(res.ok){
       st.textContent='Pushed — '+j.fieldsChanged+' field(s) on '+j.rowsChanged+' row(s)'+(j.errors&&j.errors.length?', '+j.errors.length+' error(s) (see console)':'')+'.';
@@ -596,7 +596,7 @@ var sc=document.getElementById('synccat');
 if(sc) sc.addEventListener('click', async function(){
   sc.disabled=true; var st=document.getElementById('pushstatus'); st.textContent='Reading categories from Square…';
   try{
-    var res=await fetch('/catalog/sync-categories?client=RE',{method:'POST'});
+    var res=await fetch('/catalog/sync-categories',{method:'POST'});
     var j=await res.json();
     if(res.ok){ st.textContent='Synced '+j.updated+' row(s) from '+j.matched+' item(s) — reloading…'; setTimeout(function(){ location.reload(); }, 700); }
     else { st.textContent='Error: '+(j.error||res.status); sc.disabled=false; }

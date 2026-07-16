@@ -163,7 +163,7 @@ ${working ? '<meta http-equiv="refresh" content="8">' : ''}
 <script>
 async function retryErrored(b){
   b.disabled=true; b.textContent='Re-queuing…';
-  try{ await fetch('/queue/retry?client=RE',{method:'POST'}); location.reload(); }
+  try{ await fetch('/queue/retry',{method:'POST'}); location.reload(); }
   catch(e){ b.disabled=false; alert(e.message); }
 }
 function selectedIds(){ return Array.prototype.map.call(document.querySelectorAll('.qchk:checked'), function(c){ return c.getAttribute('data-id'); }); }

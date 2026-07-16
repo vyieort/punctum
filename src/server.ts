@@ -201,7 +201,7 @@ async function up(){
   var f=el.files[0]; b.disabled=true; o.hidden=true; s.textContent='Reading '+f.name+' and seeding…';
   try{
     var buf=await f.arrayBuffer();
-    var res=await fetch('/library/import?filename='+encodeURIComponent(f.name)+'&client=RE',{method:'POST',headers:{'content-type':'application/octet-stream'},body:buf});
+    var res=await fetch('/library/import?filename='+encodeURIComponent(f.name),{method:'POST',headers:{'content-type':'application/octet-stream'},body:buf});
     var j=await res.json();
     if(res.ok){
       s.innerHTML='Done — '+j.seeded+' items seeded ('+j.inserted+' new, '+j.updated+' updated); '+j.generatedSkus+' SKUs generated. Now click “Link to Square catalog” below.';
@@ -213,7 +213,7 @@ async function sync(){
   var b=document.getElementById('sync'), s=document.getElementById('syncstatus');
   b.disabled=true; s.textContent='Listing the Square catalog and matching…';
   try{
-    var res=await fetch('/library/sync?client=RE',{method:'POST'});
+    var res=await fetch('/library/sync',{method:'POST'});
     var j=await res.json();
     if(res.ok){ s.innerHTML='Linked '+j.updated+' of '+j.needing+' items to Square. <a href="/queue">Open the queue →</a>'; }
     else { s.textContent='Error: '+(j.error||res.status); }
@@ -247,7 +247,7 @@ async function run(){
   var b=document.getElementById('go'), s=document.getElementById('status');
   b.disabled=true; s.textContent='Provisioning — creating categories in Square…';
   try{
-    var res=await fetch('/jobs/categories/provision?client=RE',{method:'POST'});
+    var res=await fetch('/jobs/categories/provision',{method:'POST'});
     var j=await res.json();
     if(res.ok){ s.textContent='Done — created '+j.created+' categories. Re-run the preview to see your own category IDs.'; }
     else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }
@@ -321,7 +321,7 @@ async function run(){
   var b=document.getElementById('go'), o=document.getElementById('out');
   b.disabled=true; s.textContent='Pushing to Square…';
   try{
-    var res=await fetch('/jobs/import/run?invoice='+encodeURIComponent(invoice)+'&client=RE',{method:'POST'});
+    var res=await fetch('/jobs/import/run?invoice='+encodeURIComponent(invoice),{method:'POST'});
     var j=await res.json();
     if(res.ok){ s.textContent='Done — '+j.itemsCreated+' items created, '+j.variationsAdded+' variations added, '+j.variationsRestocked+' restocked, '+j.inventoryAdjusted+' inventory changes.'; o.textContent=JSON.stringify(j,null,2); }
     else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }
@@ -367,7 +367,7 @@ async function run(all){
     s.textContent='Enriching… '+tot.enriched+' matched, '+tot.noImage+' no-match ('+tot.processed+(all?'':'/'+target)+')';
     var res, txt, j, attempt=0;
     while(true){
-      try{ res=await fetch('/jobs/images/run?client=RE&limit='+lim,{method:'POST'}); txt=await res.text(); break; }
+      try{ res=await fetch('/jobs/images/run?limit='+lim,{method:'POST'}); txt=await res.text(); break; }
       catch(e){
         attempt++;
         if(attempt>3){ s.textContent='Stopped: '+e.message+'. Finished items are saved — click to continue.'; b.disabled=false; ba.disabled=false; return; }
@@ -417,7 +417,7 @@ async function run(){
   var b=document.getElementById('go'), s=document.getElementById('status'), o=document.getElementById('out');
   b.disabled=true; s.textContent='Wiping sandbox catalog…';
   try{
-    var res=await fetch('/jobs/sandbox/wipe?client=RE',{method:'POST'});
+    var res=await fetch('/jobs/sandbox/wipe',{method:'POST'});
     var j=await res.json();
     if(res.ok){ s.textContent='Done — deleted '+j.itemsDeleted+' of '+j.itemsFound+' items, cleared '+j.mappingsCleared+' mappings, '+j.invoicesCleared+' invoices ('+j.env+').'; o.textContent=JSON.stringify(j,null,2); }
     else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }
