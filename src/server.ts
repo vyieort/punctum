@@ -31,6 +31,8 @@ import { getItemDetail, renderItemPage, getVariationDetail, renderVariationPage 
 import { applyEdits, getEditPatterns, getCategoryPaths, clearEdits, type RowEdit } from './review/catalog-edit.js';
 import { renderPatternsPage } from './review/patterns-page.js';
 import { syncCategoryPaths } from './jobs/category-sync.js';
+import { getClientSettings, setAutoEnrichImages } from './lib/client-settings.js';
+import { renderSettingsPage } from './review/settings-page.js';
 import { passwordLogin, refreshSession } from './auth/gotrue.js';
 import { getUser, getSession, verifyAccessToken, ACCESS_COOKIE, REFRESH_COOKIE } from './auth/session.js';
 import { resolveClientForUser, parseCookies } from './auth/tenant.js';
@@ -359,13 +361,19 @@ async function run(){
   while(tot.processed<target){
     var lim=Math.min(CHUNK, target-tot.processed);
     s.textContent='Enriching… '+tot.enriched+' matched, '+tot.noImage+' no-match ('+tot.processed+'/'+target+')';
-    var res, txt, j;
-    try{
-      res=await fetch('/jobs/images/run?client=RE&limit='+lim,{method:'POST'});
-      txt=await res.text();
-    }catch(e){ s.textContent='Stopped: '+e.message+'. Finished items are saved — click to continue.'; b.disabled=false; return; }
+    var res, txt, j, attempt=0;
+    while(true){
+      try{ res=await fetch('/jobs/images/run?client=RE&limit='+lim,{method:'POST'}); txt=await res.text(); break; }
+      catch(e){
+        attempt++;
+        if(attempt>3){ s.textContent='Stopped: '+e.message+'. Finished items are saved — click to continue.'; b.disabled=false; return; }
+        s.textContent='Connection hiccup (e.g. a deploy) — retrying '+attempt+'/3… '+tot.processed+' done so far.';
+        await new Promise(function(r){ setTimeout(r, attempt*3000); });
+      }
+    }
     try{ j=JSON.parse(txt); }catch(_){ s.textContent='Stopped: a batch hit the server timeout. Finished items are saved — click to continue.'; b.disabled=false; return; }
     if(!res.ok){ s.textContent='Error: '+(j.error||res.status); b.disabled=false; return; }
+    if(j.disabled){ s.innerHTML='Auto-enrich is turned <strong>off</strong> for this studio. Turn it on in <a href="/settings">Settings</a>, or add photos manually.'; b.disabled=false; return; }
     tot.processed+=j.processed; tot.enriched+=j.enriched; tot.noImage+=j.noImage; tot.skipped+=j.skipped;
     o.textContent=JSON.stringify(tot,null,2);
     if(j.processed===0){ s.textContent='All done — nothing left to enrich.'; b.disabled=false; return; }
@@ -468,6 +476,7 @@ const renderHome = (sess: { email: string | null; clientId: string }): string =>
 
   <h2>Account</h2>
   <ul>
+    <li><a href="/settings">Settings</a><div class="d">Studio preferences &mdash; e.g. turn off image auto-enrichment if you supply your own photos.</div></li>
     <li><a href="/logout">Log out</a><div class="d">End your session and return to the sign-in page.</div></li>
     <li><a href="/whoami">Session info</a><div class="d">Your user id and current tenant (JSON).</div></li>
   </ul>
@@ -701,6 +710,29 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+  // Per-client settings (auto-enrich toggle).
+  if (url.pathname === '/settings' && req.method === 'GET') {
+    try {
+      const s = await getClientSettings(getPool() as unknown as Queryable, authedClient);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(renderSettingsPage(s));
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+  if (url.pathname === '/settings' && req.method === 'POST') {
+    try {
+      const raw = await readBodyBuffer(req);
+      const body = JSON.parse(raw.toString('utf8') || '{}') as { autoEnrichImages?: boolean };
+      await setAutoEnrichImages(getPool() as unknown as Queryable, authedClient, body.autoEnrichImages !== false);
+      sendJson(res, 200, { ok: true });
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
   // Learning-loop report: recurring corrections that point at import-rule fixes.
   if (url.pathname === '/catalog/edits' && req.method === 'GET') {
     const client = authedClient;

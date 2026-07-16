@@ -205,6 +205,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   .pcell:not(.matched) .ptgt{color:#b45309}
   tr.droptarget{outline:2px dashed #7c3aed;outline-offset:-2px;background:#faf5ff}
   input.eprice{width:74px}
+  select.ecat{min-width:220px}
   .edesc{margin-top:3px;color:#374151}
   tr.needsattn td:first-child{box-shadow:inset 3px 0 0 #d97706}
   .catwarn{color:#b45309;margin-right:3px;font-size:12px}

@@ -20,6 +20,7 @@ import {
 import { searchImages, type ImageCandidate } from '../lib/serpapi.js';
 import { scoreImages, type VisionResult } from '../lib/vision.js';
 import { buildImageQuery } from '../lib/image-query.js';
+import { getClientSettings } from '../lib/client-settings.js';
 
 export interface EnrichOps {
   search(query: string): Promise<ImageCandidate[]>;
@@ -71,6 +72,7 @@ export interface EnrichResult {
   noImage: number;
   skipped: number; // already had an image
   errors: Array<{ sku: string; error: string }>;
+  disabled?: boolean; // auto-enrich turned off for this client (Settings)
 }
 
 interface MappingRow {
@@ -87,6 +89,11 @@ interface MappingRow {
 }
 
 export async function enrichImages(db: Queryable, clientId: string, opts: EnrichOptions = {}): Promise<EnrichResult> {
+  // Studios supplying their own photography can turn auto-enrichment off (Settings). Check first,
+  // before touching Square config, so a disabled studio needs no Square credentials.
+  if (!(await getClientSettings(db, clientId)).autoEnrichImages) {
+    return { processed: 0, enriched: 0, noImage: 0, skipped: 0, errors: [], disabled: true };
+  }
   const ops = opts.ops ?? liveEnrichOps(squareConfigFromEnv());
   const limit = opts.limit ?? 20;
 
