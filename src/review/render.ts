@@ -37,6 +37,7 @@ export function renderReviewPage(data: InvoiceForReview): string {
   const showBackorder = lines.some((l) => l.backorder);
   const flaggedCount = lines.filter((l) => l.flags.length > 0).length;
   const productCount = lines.filter((l) => l.is_product).length;
+  const hasUnclassified = lines.some((l) => l.flags.includes('unclassified'));
   const rows = lines
     .map((l) => {
       const flagged = l.flags.length > 0;
@@ -81,6 +82,7 @@ ${status === 'importing' ? '<meta http-equiv="refresh" content="4">' : ''}
   tbody tr.flag{background:#fffbeb;box-shadow:inset 3px 0 0 #d97706}
   .flagnote{color:#b45309;font-size:12px;margin-top:2px}
   .flagsummary{background:#fffbeb;border:1px solid #fcd34d;color:#92400e;padding:.4rem .7rem;border-radius:6px;font-size:13px;margin:0 0 .7rem}
+  .pushnote{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;padding:.4rem .7rem;border-radius:6px;font-size:13px;margin:0 0 .7rem} .pushnote a{color:#1d4ed8}
   .actions{margin-top:1.1rem;display:flex;gap:.6rem}
   form{display:inline}
   button{padding:.55rem 1.1rem;font:inherit;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer}
@@ -96,6 +98,7 @@ ${status === 'importing' ? '<meta http-equiv="refresh" content="4">' : ''}
   <div class="pdfwrap">${pdfPanel}</div>
   <div class="data">
       ${flaggedCount ? `<div class="flagsummary">&#9888; ${flaggedCount} of ${productCount} product line${productCount === 1 ? '' : 's'} flagged to double-check &mdash; highlighted below.</div>` : ''}
+      ${hasUnclassified ? `<div class="pushnote">&#8505; An uncategorized item can still be approved &mdash; it imports into the <strong>Flag For Review</strong> category, then you set its category on the <a href="/catalog">catalog</a> page. No need to reject the whole invoice.</div>` : ''}
       <table>
         <thead><tr><th>#</th><th>Description</th><th>Qty</th><th>Wholesale</th><th>Gems</th><th>Notes</th><th>SKU</th>${showBackorder ? '<th>Back order</th>' : ''}<th>Product?</th></tr></thead>
         <tbody>${rows}</tbody>

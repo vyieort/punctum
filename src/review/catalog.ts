@@ -89,6 +89,9 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
     .map(([s, n]) => `${n} ${s}`)
     .join(' · ');
 
+  const needsCategory = (r: CatalogRow): boolean => !r.categoryPath || /flag\s*for\s*review/i.test(r.categoryPath);
+  const uncatCount = rows.filter(needsCategory).length;
+
   const catOptions = (sel: string): string => {
     const inList = categoryPaths.includes(sel);
     const opts = [`<option value=""${sel === '' ? ' selected' : ''}>—</option>`];
@@ -115,7 +118,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
       const alts = r.hasCandidates
         ? `<button class="alts" data-seq="${esc(r.seq)}" data-cap="${esc(caption)}">Review alternatives</button>`
         : '';
-      return `<tr id="row-${esc(r.seq)}" data-seq="${esc(r.seq)}" data-sku="${esc(r.vendorSku)}" data-item="${esc(r.itemName)}" data-variation="${esc(r.variationName)}">
+      return `<tr id="row-${esc(r.seq)}" class="${needsCategory(r) ? 'needsattn' : ''}" data-seq="${esc(r.seq)}" data-sku="${esc(r.vendorSku)}" data-item="${esc(r.itemName)}" data-variation="${esc(r.variationName)}">
         <td class="chkcell"><input type="checkbox" class="rowchk" data-seq="${esc(r.seq)}"></td>
         <td class="showcell">${thumb}${useItem}</td>
         <td class="editcell">
@@ -126,7 +129,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
           ${r.tags ? `<div class="tags">${esc(r.tags)}</div>` : ''}
         </td>
         <td>${esc(r.variationName)}</td>
-        <td><select class="ecat edit" data-seq="${esc(r.seq)}" data-field="categoryPath" data-orig="${esc(r.categoryPath)}">${catOptions(r.categoryPath)}</select></td>
+        <td>${needsCategory(r) ? '<span class="catwarn" title="Uncategorized — needs a category">&#9888;</span>' : ''}<select class="ecat edit" data-seq="${esc(r.seq)}" data-field="categoryPath" data-orig="${esc(r.categoryPath)}">${catOptions(r.categoryPath)}</select></td>
         <td>${esc(r.vendor)}</td>
         <td class="mono">${esc(r.vendorSku)}</td>
         <td class="wcell">${wholesale}</td>
@@ -203,6 +206,9 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   tr.droptarget{outline:2px dashed #7c3aed;outline-offset:-2px;background:#faf5ff}
   input.eprice{width:74px}
   .edesc{margin-top:3px;color:#374151}
+  tr.needsattn td:first-child{box-shadow:inset 3px 0 0 #d97706}
+  .catwarn{color:#b45309;margin-right:3px;font-size:12px}
+  .uncatnote{color:#b45309}
   tr.dirty{background:#fffbeb} tr.dirty td{border-bottom-color:#fde68a}
   input.dirty,select.dirty{border-color:#d97706;background:#fffbeb}
   .canon{color:#9ca3af;font-size:10px;margin:2px 0;display:none}
@@ -211,7 +217,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
 </style></head>
 <body>
   <h2>Catalog review</h2>
-  <p class="sub">${rows.length} variations${countLine ? ' — ' + esc(countLine) : ''}. Click a <strong>thumbnail</strong> to preview it large up top. <strong>Review alternatives</strong> shows the other candidates — pick a better one or clear the image.</p>
+  <p class="sub">${rows.length} variations${countLine ? ' — ' + esc(countLine) : ''}${uncatCount ? ` &middot; <strong class="uncatnote">&#9888; ${uncatCount} need a category</strong>` : ''}. Click a <strong>thumbnail</strong> to preview it large up top. <strong>Review alternatives</strong> shows the other candidates — pick a better one or clear the image.</p>
   <div id="preview">
     <img id="pv" alt="" style="display:none">
     <div id="pvempty">Click a thumbnail to preview its image here (500×500).</div>

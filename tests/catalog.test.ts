@@ -97,6 +97,17 @@ test('renderCatalogPage renders the edit grid: editable cells, category options,
   assert.match(html, /data-sku="S1"/); // row carries data for filename matching
 });
 
+test('renderCatalogPage flags + counts uncategorized rows', async () => {
+  const db = await seeded();
+  await addRow(db, { sku: 'CATTED', vid: 'V1', status: 'PUSHED' });
+  await db.query(`update catalog_mapping set category_path='Threadless > Ends' where vendor_sku='CATTED'`);
+  await addRow(db, { sku: 'BLANKCAT', vid: 'V2', status: 'PUSHED' }); // no category_path -> uncategorized
+  const html = renderCatalogPage(await getCatalogRows(db as unknown as Queryable, 'RE'), ['Threadless > Ends']);
+  assert.match(html, /1 need a category/); // only the blank one
+  assert.match(html, /class="catwarn"/); // per-row warning marker
+  assert.match(html, /class="needsattn"/); // row highlight
+});
+
 test('getCandidates returns the parsed pool + the base item name', async () => {
   const db = await seeded();
   const seq = await addRow(db, { sku: 'S1', vid: 'V1', status: 'NO_IMAGE', candidates: CANDS });
