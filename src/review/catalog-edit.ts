@@ -17,10 +17,11 @@ import { loadCategoryMap } from '../jobs/import-preview.js';
 
 export interface RowEdit {
   seq: string;
-  retailPrice?: string; // dollars, as typed
-  categoryPath?: string;
-  itemName?: string; // base name (no tag suffix)
-  description?: string;
+  retailPrice?: string; // dollars, as typed  (variation-level)
+  variationName?: string; // variation-level
+  categoryPath?: string; // item-level
+  itemName?: string; // base name (no tag suffix)  (item-level)
+  description?: string; // item-level
 }
 
 export interface EditPushOps {
@@ -61,6 +62,7 @@ interface MapRow {
   vendor: string | null;
   vendor_sku: string | null;
   item_name: string | null; // stored WITH the [TAGS] suffix
+  variation_name: string | null;
   item_description: string | null;
   retail_price: string | null;
   category_path: string | null;
@@ -102,8 +104,8 @@ export async function applyEdits(
   for (const edit of edits) {
     try {
       const { rows } = await db.query(
-        `select seq, square_item_id, square_variation_id, vendor, vendor_sku, item_name, item_description,
-                retail_price::text as retail_price, category_path
+        `select seq, square_item_id, square_variation_id, vendor, vendor_sku, item_name, variation_name,
+                item_description, retail_price::text as retail_price, category_path
            from catalog_mapping where client_id = $1 and seq = $2`,
         [clientId, edit.seq],
       );
@@ -114,23 +116,34 @@ export async function applyEdits(
       const row = rows[0] as unknown as MapRow;
       let changed = 0;
 
-      // --- Price (variation-level) ---
-      if (edit.retailPrice !== undefined) {
-        const cents = dollarsToCents(edit.retailPrice);
-        const oldCents = row.retail_price ? dollarsToCents(row.retail_price) : null;
-        if (cents === null) {
-          result.errors.push({ seq: edit.seq, error: `bad price "${edit.retailPrice}"` });
-        } else if (cents !== oldCents) {
-          if (row.square_variation_id) {
-            const obj = await ops.getObject(row.square_variation_id);
-            obj.item_variation_data = obj.item_variation_data ?? {};
+      // --- Variation-level fields (name + price): one get-modify-upsert on the variation object. ---
+      const newCents = edit.retailPrice !== undefined ? dollarsToCents(edit.retailPrice) : undefined;
+      if (edit.retailPrice !== undefined && newCents === null) {
+        result.errors.push({ seq: edit.seq, error: `bad price "${edit.retailPrice}"` });
+      }
+      const oldCents = row.retail_price ? dollarsToCents(row.retail_price) : null;
+      const wantPrice = newCents != null && newCents !== oldCents;
+      const wantVarName = edit.variationName !== undefined && edit.variationName !== (row.variation_name ?? '');
+      if (wantPrice || wantVarName) {
+        if (row.square_variation_id) {
+          const obj = await ops.getObject(row.square_variation_id);
+          obj.item_variation_data = obj.item_variation_data ?? {};
+          if (wantPrice) {
             obj.item_variation_data.pricing_type = 'FIXED_PRICING';
-            obj.item_variation_data.price_money = { amount: cents, currency: 'USD' };
-            await ops.upsert({ idempotency_key: randomUUID(), object: obj });
-            result.pushed++;
+            obj.item_variation_data.price_money = { amount: newCents, currency: 'USD' };
           }
-          await db.query(`update catalog_mapping set retail_price = $3, updated_at = now() where client_id = $1 and seq = $2`, [clientId, edit.seq, cents / 100]);
-          await logEdit(db, clientId, row, 'retail_price', oldCents != null ? centsToStr(oldCents) : '', centsToStr(cents));
+          if (wantVarName) obj.item_variation_data.name = edit.variationName;
+          await ops.upsert({ idempotency_key: randomUUID(), object: obj });
+          result.pushed++;
+        }
+        if (wantPrice) {
+          await db.query(`update catalog_mapping set retail_price = $3, updated_at = now() where client_id = $1 and seq = $2`, [clientId, edit.seq, newCents / 100]);
+          await logEdit(db, clientId, row, 'retail_price', oldCents != null ? centsToStr(oldCents) : '', centsToStr(newCents));
+          changed++;
+        }
+        if (wantVarName) {
+          await db.query(`update catalog_mapping set variation_name = $3, updated_at = now() where client_id = $1 and seq = $2`, [clientId, edit.seq, edit.variationName]);
+          await logEdit(db, clientId, row, 'variation_name', row.variation_name ?? '', edit.variationName!);
           changed++;
         }
       }

@@ -27,7 +27,7 @@ import { seedLibrary } from './jobs/library-seed.js';
 import { syncLibraryItemIds } from './jobs/library-sync.js';
 import { enrichImages } from './jobs/enrich-images.js';
 import { getCatalogRows, renderCatalogPage, getCandidates, setVariationImage, clearVariationImage, setItemImageFromRow, uploadVariationImage } from './review/catalog.js';
-import { getItemDetail, renderItemPage } from './review/item-detail.js';
+import { getItemDetail, renderItemPage, getVariationDetail, renderVariationPage } from './review/item-detail.js';
 import { applyEdits, getEditPatterns, getCategoryPaths, clearEdits, type RowEdit } from './review/catalog-edit.js';
 import { renderPatternsPage } from './review/patterns-page.js';
 import { syncCategoryPaths } from './jobs/category-sync.js';
@@ -833,6 +833,22 @@ const server = createServer(async (req, res) => {
       }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(renderItemPage(item));
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  // Variation detail page: one SKU — variation-level fields + photo controls.
+  if (itemParts[0] === 'variations' && itemParts.length === 2 && req.method === 'GET') {
+    try {
+      const v = await getVariationDetail(getPool() as unknown as Queryable, authedClient, decodeURIComponent(itemParts[1]!));
+      if (!v) {
+        sendJson(res, 404, { error: 'variation not found' });
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(renderVariationPage(v));
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }

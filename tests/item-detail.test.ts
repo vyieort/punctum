@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import type { Queryable } from '../src/jobs/pg-rows.js';
 import { uploadVariationImage, type ImageEditOps } from '../src/review/catalog.js';
-import { getItemDetail, renderItemPage } from '../src/review/item-detail.js';
+import { getItemDetail, renderItemPage, getVariationDetail, renderVariationPage } from '../src/review/item-detail.js';
 
 const mig = (f: string): string => readFileSync(new URL(`../db/migrations/${f}`, import.meta.url), 'utf8');
 
@@ -85,4 +85,20 @@ test('getItemDetail groups variations under one item; renderItemPage shows uploa
   assert.match(html, /type="file"/); // per-variation upload control
   assert.match(html, /\/variations\//); // links down to variation detail
   assert.match(html, /← Catalog/); // breadcrumb up
+});
+
+test('getVariationDetail + renderVariationPage show one SKU with editable fields', async () => {
+  const db = await seeded();
+  const seq = await seqFor(db, 'SKU-2');
+  const v = await getVariationDetail(db as unknown as Queryable, 'RE', seq);
+  assert.ok(v);
+  assert.equal(v!.variationName, 'Rose Gold');
+  assert.equal(v!.itemName, '8mm Pleades');
+  assert.equal(v!.squareItemId, 'ITEM1');
+  const html = renderVariationPage(v!);
+  assert.match(html, /Rose Gold/);
+  assert.match(html, /id="vname"/); // editable variation name
+  assert.match(html, /id="price"/); // editable price
+  assert.match(html, /id="file"/); // photo upload
+  assert.match(html, /\/items\/ITEM1/); // breadcrumb up to the item
 });

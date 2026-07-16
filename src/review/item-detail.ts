@@ -68,6 +68,139 @@ const STATUS_COLOR: Record<string, string> = {
   ENRICHED: '#166534', NO_IMAGE: '#b45309', PENDING: '#6b7280', PUSHED: '#166534', NEEDS_REVIEW: '#b91c1c',
 };
 
+export interface VariationDetail {
+  seq: string;
+  squareItemId: string;
+  itemName: string;
+  variationName: string;
+  sku: string;
+  retail: string;
+  wholesale: string;
+  imageUrl: string;
+  status: string;
+  categoryPath: string;
+  vendor: string;
+}
+
+export async function getVariationDetail(db: Queryable, clientId: string, seq: string): Promise<VariationDetail | null> {
+  const { rows } = await db.query(
+    `select square_item_id, item_name, variation_name, vendor, vendor_sku, status::text as status,
+            coalesce(category_path,'') as category_path, image_url,
+            wholesale_price::text as wholesale_price, retail_price::text as retail_price
+       from catalog_mapping where client_id = $1 and seq = $2`,
+    [clientId, seq],
+  );
+  if (rows.length === 0) return null;
+  const r = rows[0] as Record<string, unknown>;
+  return {
+    seq,
+    squareItemId: str(r.square_item_id),
+    itemName: stripTagSuffix(str(r.item_name)),
+    variationName: str(r.variation_name),
+    sku: str(r.vendor_sku),
+    retail: str(r.retail_price),
+    wholesale: str(r.wholesale_price),
+    imageUrl: str(r.image_url),
+    status: str(r.status),
+    categoryPath: str(r.category_path),
+    vendor: str(r.vendor),
+  };
+}
+
+export function renderVariationPage(v: VariationDetail): string {
+  const color = STATUS_COLOR[v.status] ?? '#6b7280';
+  const itemHref = v.squareItemId ? `/items/${esc(v.squareItemId)}` : '/catalog';
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(v.itemName)} — ${esc(v.variationName)} · Punctum</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:1.5rem auto;max-width:640px;color:#1a1a1a;padding:0 1rem}
+  a{color:#2563eb;text-decoration:none} a:hover{text-decoration:underline}
+  .bc{font-size:13px;color:#6b7280;margin-bottom:.75rem}
+  h2{margin:0 0 1rem}
+  .row{display:flex;gap:1.25rem;align-items:flex-start}
+  .imgcol{flex:0 0 180px;text-align:center}
+  .img{width:180px;height:180px;object-fit:cover;border-radius:10px;border:1px solid #e5e7eb;background:#f3f4f6}
+  .imgempty{width:180px;height:180px;display:flex;align-items:center;justify-content:center;color:#9ca3af;border:1px dashed #d1d5db;border-radius:10px;font-size:13px}
+  .imgbtns{margin-top:.5rem;display:flex;gap:.4rem;justify-content:center;flex-wrap:wrap}
+  .fields{flex:1}
+  label{display:block;font-size:12px;color:#6b7280;margin:.7rem 0 .2rem}
+  input{width:100%;box-sizing:border-box;font:inherit;padding:.45rem .6rem;border:1px solid #d1d5db;border-radius:6px}
+  .ro{color:#374151;font-size:14px;padding:.2rem 0} .mono{font-family:ui-monospace,Menlo,monospace;font-size:13px}
+  .badge{color:#fff;border-radius:999px;padding:.12rem .55rem;font-size:11px;font-weight:600}
+  button{font:inherit;font-size:13px;border-radius:6px;cursor:pointer;padding:.4rem .8rem}
+  .save{margin-top:1rem;border:1px solid #166534;background:#166534;color:#fff}
+  .save:disabled{opacity:.5}
+  .mini{font-size:12px;padding:.3rem .6rem;border:1px solid #7c3aed;color:#7c3aed;background:#fff}
+  .up{border:1px solid #166534;color:#166534;background:#fff;font-size:12px;padding:.3rem .6rem}
+  .clr{border:1px solid #b45309;color:#b45309;background:#fff;font-size:12px;padding:.3rem .6rem}
+  #status{margin-top:.75rem;font-size:13px;color:#333;min-height:1.1em}
+</style></head>
+<body>
+  <div class="bc"><a href="/catalog">Catalog</a> › <a href="${itemHref}">${esc(v.itemName)}</a> › ${esc(v.variationName) || '(default)'}</div>
+  <h2>${esc(v.variationName) || '(default variation)'} <span class="badge" style="background:${color}">${esc(v.status)}</span></h2>
+  <div class="row">
+    <div class="imgcol">
+      ${v.imageUrl ? `<img class="img" src="${esc(v.imageUrl)}" alt="">` : '<div class="imgempty">no image</div>'}
+      <div class="imgbtns">
+        <label class="up">Upload<input type="file" id="file" accept="image/*" hidden></label>
+        ${v.imageUrl ? '<button class="mini" id="asitem">★ item</button><button class="clr" id="clear">Remove</button>' : ''}
+      </div>
+    </div>
+    <div class="fields">
+      <label>Variation name</label>
+      <input id="vname" value="${esc(v.variationName)}">
+      <label>Retail price ($)</label>
+      <input id="price" value="${esc(v.retail)}" inputmode="decimal">
+      <label>SKU</label>
+      <div class="ro mono">${esc(v.sku) || '—'}</div>
+      <label>Wholesale cost</label>
+      <div class="ro">${v.wholesale ? '$' + esc(v.wholesale) : '—'}</div>
+      <label>Item / category</label>
+      <div class="ro"><a href="${itemHref}">${esc(v.itemName)}</a>${v.categoryPath ? ' · ' + esc(v.categoryPath) : ''}</div>
+      <button class="save" id="save">Save to Square</button>
+    </div>
+  </div>
+  <div id="status"></div>
+<script>
+var SEQ=${JSON.stringify(v.seq)};
+function st(t){ document.getElementById('status').textContent=t; }
+document.getElementById('save').addEventListener('click', async function(){
+  var b=this; b.disabled=true; st('Saving to Square…');
+  var edit={ seq:SEQ, variationName:document.getElementById('vname').value, retailPrice:document.getElementById('price').value };
+  try{
+    var res=await fetch('/catalog/edits',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({edits:[edit]})});
+    var j=await res.json();
+    if(res.ok){ st('Saved — '+j.fieldsChanged+' field(s) changed'+(j.errors&&j.errors.length?', '+j.errors.length+' error(s)':'')+'.'); }
+    else { st('Error: '+(j.error||res.status)); }
+  }catch(e){ st('Error: '+e.message); }
+  b.disabled=false;
+});
+document.getElementById('file').addEventListener('change', async function(){
+  if(!this.files||!this.files[0]) return;
+  var f=this.files[0]; st('Uploading '+f.name+'…');
+  try{
+    var buf=await f.arrayBuffer();
+    var res=await fetch('/catalog/upload-image?seq='+encodeURIComponent(SEQ),{method:'POST',headers:{'content-type':f.type||'application/octet-stream'},body:buf});
+    var j=await res.json();
+    if(res.ok&&j.ok){ st('Uploaded ✓ — reloading…'); setTimeout(function(){location.reload();},600); } else { st('Error: '+(j.error||res.status)); }
+  }catch(e){ st('Error: '+e.message); }
+});
+var ai=document.getElementById('asitem');
+if(ai) ai.addEventListener('click', async function(){
+  st('Setting item image…');
+  try{ var res=await fetch('/catalog/set-item-image?seq='+encodeURIComponent(SEQ),{method:'POST'}); st(res.ok?'Item image set ✓':'Error '+res.status); }catch(e){ st('Error: '+e.message); }
+});
+var cl=document.getElementById('clear');
+if(cl) cl.addEventListener('click', async function(){
+  if(!confirm('Remove this image?')) return;
+  st('Removing…');
+  try{ var res=await fetch('/catalog/clear-image?seq='+encodeURIComponent(SEQ),{method:'POST'}); if(res.ok){ st('Removed — reloading…'); setTimeout(function(){location.reload();},500);} else st('Error '+res.status); }catch(e){ st('Error: '+e.message); }
+});
+</script>
+</body></html>`;
+}
+
 export function renderItemPage(item: ItemDetail): string {
   const hero = item.variations.find((v) => v.imageUrl)?.imageUrl ?? '';
   const rows = item.variations

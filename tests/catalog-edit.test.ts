@@ -62,6 +62,29 @@ test('price edit pushes the variation and logs the correction', async () => {
   assert.equal(log.rows[0]!.new_value, '75.00');
 });
 
+test('variation name edit pushes the variation object and logs it', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  const { ops, pushed } = fakeOps();
+  const r = await applyEdits(q, 'RE', [{ seq: await seqOf(db), variationName: 'Yellow 14K' }], { ops });
+  assert.equal(r.pushed, 1);
+  assert.equal(pushed[0].item_variation_data.name, 'Yellow 14K');
+  const vn = (await db.query<{ vn: string }>(`select variation_name as vn from catalog_mapping where vendor_sku='NEO-1'`)).rows[0]!.vn;
+  assert.equal(vn, 'Yellow 14K');
+  assert.equal((await db.query(`select 1 from catalog_edits where field='variation_name'`)).rows.length, 1);
+});
+
+test('variation name + price collapse into one variation upsert', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  const { ops, pushed } = fakeOps();
+  const r = await applyEdits(q, 'RE', [{ seq: await seqOf(db), variationName: 'V2', retailPrice: '80' }], { ops });
+  assert.equal(r.pushed, 1); // single upsert covers both variation fields
+  assert.equal(r.fieldsChanged, 2);
+  assert.equal(pushed[0].item_variation_data.name, 'V2');
+  assert.equal(pushed[0].item_variation_data.price_money.amount, 8000);
+});
+
 test('name+category+description: one item upsert, images preserved, 3 corrections logged', async () => {
   const db = await seeded();
   const q = db as unknown as Queryable;
