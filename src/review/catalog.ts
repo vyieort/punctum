@@ -37,12 +37,24 @@ export interface CatalogRow {
 
 const stripTagSuffix = (name: string): string => name.replace(/\s*\[.*\]\s*$/, '').trim();
 
+/** Count the stored image candidates (the enrichment pool). '' or '[]' -> 0, so the row shows a
+ *  "No alternatives" label instead of an empty "Review alternatives" gallery. */
+function candidateCount(raw: unknown): number {
+  if (!raw) return 0;
+  try {
+    const arr = JSON.parse(String(raw));
+    return Array.isArray(arr) ? arr.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export async function getCatalogRows(db: Queryable, clientId: string, limit = 1000): Promise<CatalogRow[]> {
   const { rows } = await db.query(
     `select seq, vendor, vendor_sku, square_item_id, item_name, variation_name, tags,
             status::text as status, wholesale_price::text as wholesale_price, retail_price::text as retail_price,
             coalesce(category_path, '') as category_path, coalesce(item_description, '') as item_description,
-            image_url, coalesce(image_candidates, '') <> '' as has_candidates
+            image_url, coalesce(image_candidates, '') as image_candidates
        from catalog_mapping
       where client_id = $1 and coalesce(square_variation_id, '') <> ''
       order by item_name, variation_name
@@ -65,7 +77,7 @@ export async function getCatalogRows(db: Queryable, clientId: string, limit = 10
       categoryPath: str(row.category_path),
       description: str(row.item_description),
       imageUrl: str(row.image_url),
-      hasCandidates: row.has_candidates === true,
+      hasCandidates: candidateCount(row.image_candidates) > 0,
       squareItemId: str(row.square_item_id),
     };
   });
@@ -119,7 +131,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
       const wholesale = r.wholesalePrice ? `$${esc(r.wholesalePrice)}` : '';
       const alts = r.hasCandidates
         ? `<button class="alts" data-seq="${esc(r.seq)}" data-cap="${esc(caption)}">Review alternatives</button>`
-        : '';
+        : '<span class="noalts" title="No stored image candidates for this variation">No alternatives</span>';
       return `<tr id="row-${esc(r.seq)}" class="${needsCategory(r) ? 'needsattn' : ''}" data-seq="${esc(r.seq)}" data-sku="${esc(r.vendorSku)}" data-item="${esc(r.itemName)}" data-variation="${esc(r.variationName)}" data-vendor="${esc(r.vendor)}" data-category="${esc(r.categoryPath)}" data-wholesale="${esc(r.wholesalePrice)}" data-retail="${esc(r.retailPrice)}" data-status="${esc(r.status)}">
         <td class="chkcell"><input type="checkbox" class="rowchk" data-seq="${esc(r.seq)}"></td>
         <td class="showcell">${thumb}${useItem}</td>
@@ -158,9 +170,21 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   #gallery{display:none;width:100%;max-width:800px}
   .galtitle{font-size:13px;color:#374151;margin:.25rem 0 .6rem;text-align:center}
   .galgrid{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
-  .galimg{width:140px;height:140px;object-fit:cover;border-radius:6px;border:1px solid #e5e7eb;cursor:pointer;background:#f3f4f6}
-  .galimg:hover{outline:2px solid #2563eb}
+  .galtile{position:relative;width:140px;height:140px}
+  .galimg{width:140px;height:140px;object-fit:cover;border-radius:6px;border:1px solid #e5e7eb;background:#f3f4f6;display:block}
+  .galov{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+    background:rgba(17,24,39,.55);border-radius:6px}
+  .galtile:hover .galov,.galtile:focus-within .galov{display:flex}
+  .galbtn{font:inherit;font-size:12px;padding:.32rem .55rem;border-radius:6px;border:1px solid #fff;
+    background:rgba(255,255,255,.95);color:#111;cursor:pointer;min-width:108px}
+  .galbtn.use{background:#166534;border-color:#166534;color:#fff}
+  .galfull{display:flex;flex-direction:column;align-items:center;gap:.7rem}
+  .galfull img{width:500px;height:500px;max-width:100%;object-fit:contain;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px}
+  .galfullbtns{display:flex;gap:.6rem;flex-wrap:wrap;justify-content:center}
+  .galfullbtns button{font:inherit;font-size:13px;padding:.42rem .85rem;border-radius:6px;cursor:pointer;border:1px solid #d1d5db;background:#fff;color:#111}
+  .galfullbtns button.use{background:#166534;border-color:#166534;color:#fff}
   .galclear{margin:.8rem auto 0;display:block;font:inherit;font-size:13px;padding:.35rem .8rem;border:1px solid #b45309;color:#b45309;background:#fff;border-radius:6px;cursor:pointer}
+  .noalts{color:#9ca3af;font-size:12px;font-style:italic}
   table{border-collapse:collapse;width:100%;font-size:13px}
   th,td{border-bottom:1px solid #eee;padding:.5rem .6rem;text-align:left;vertical-align:top}
   th{color:#666;font-weight:600}
@@ -290,41 +314,92 @@ document.querySelectorAll('.alts').forEach(function(b){
     b.disabled=false; b.textContent='Review alternatives';
   });
 });
+var galCands=[];
 function renderGallery(cands){
+  galCands=cands||[];
   var g=document.getElementById('gallery'); g.innerHTML='';
   document.getElementById('pv').style.display='none'; document.getElementById('pvempty').style.display='none';
-  var t=document.createElement('div'); t.className='galtitle'; t.textContent=(cands.length?'Pick the best match for: ':'No stored candidates for: ')+activeCap; g.appendChild(t);
+  document.getElementById('pvcap').textContent=''; document.getElementById('pvlink').style.display='none';
+  var t=document.createElement('div'); t.className='galtitle'; t.textContent=(galCands.length?'Hover an image, then View full size or Use as image — ':'No stored candidates for: ')+activeCap; g.appendChild(t);
   var grid=document.createElement('div'); grid.className='galgrid';
-  cands.forEach(function(c){
-    var im=document.createElement('img'); im.src=c.thumb; im.className='galimg'; im.title='Use this image';
-    im.addEventListener('click', function(){ useImage(c.pushUrl, c.thumb, im); });
-    grid.appendChild(im);
+  galCands.forEach(function(c){
+    var tile=document.createElement('div'); tile.className='galtile';
+    var im=document.createElement('img'); im.src=c.thumb; im.className='galimg'; im.alt='';
+    var ov=document.createElement('div'); ov.className='galov';
+    var bFull=document.createElement('button'); bFull.className='galbtn'; bFull.type='button'; bFull.textContent='View full size';
+    bFull.addEventListener('click', function(){ showFull(c); });
+    var bUse=document.createElement('button'); bUse.className='galbtn use'; bUse.type='button'; bUse.textContent='Use as image';
+    bUse.addEventListener('click', function(){ useImage(c, bUse); });
+    ov.appendChild(bFull); ov.appendChild(bUse);
+    tile.appendChild(im); tile.appendChild(ov); grid.appendChild(tile);
   });
   g.appendChild(grid);
-  var clr=document.createElement('button'); clr.className='galclear'; clr.textContent='✕ None of these — clear image';
+  var clr=document.createElement('button'); clr.className='galclear'; clr.type='button'; clr.textContent='✕ None of these — clear image';
   clr.addEventListener('click', clearImg); g.appendChild(clr);
   g.style.display='block';
 }
-async function useImage(url, thumb, im){
-  im.style.outline='3px solid #166534';
+// Full-size view of one candidate, with a way back to the grid and a Use-as-image action.
+function showFull(c){
+  var g=document.getElementById('gallery'); g.innerHTML='';
+  var wrap=document.createElement('div'); wrap.className='galfull';
+  var im=document.createElement('img'); im.src=c.pushUrl||c.thumb; im.alt='';
+  im.addEventListener('error', function(){ if(c.thumb && im.src!==c.thumb) im.src=c.thumb; });
+  var btns=document.createElement('div'); btns.className='galfullbtns';
+  var back=document.createElement('button'); back.type='button'; back.textContent='← Review alternatives';
+  back.addEventListener('click', function(){ renderGallery(galCands); });
+  var use=document.createElement('button'); use.type='button'; use.className='use'; use.textContent='Use as image';
+  use.addEventListener('click', function(){ useImage(c, use); });
+  btns.appendChild(back); btns.appendChild(use);
+  wrap.appendChild(im); wrap.appendChild(btns); g.appendChild(wrap); g.style.display='block';
+}
+// Assign the chosen image, refresh the row thumbnail from Square's hosted URL, then return to the
+// default catalog view.
+async function useImage(c, btn){
+  if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
   try{
-    var res=await fetch('/catalog/set-image?client=RE&seq='+encodeURIComponent(activeSeq)+'&url='+encodeURIComponent(url)+'&thumb='+encodeURIComponent(thumb||''),{method:'POST'});
-    if(res.ok){
-      var th=activeTr.querySelector('.thumb'); if(th){ th.src=url; th.setAttribute('data-url', url); }
-      var badge=activeTr.querySelector('.badge'); if(badge){ badge.textContent='ENRICHED'; badge.style.background='#166534'; }
-      var u=activeTr.querySelector('.url'); if(u){ u.href=url; u.textContent=url; }
-      showSingle(url, activeCap, activeTr);
-    } else { im.style.outline=''; alert('Error '+res.status); }
-  }catch(e){ im.style.outline=''; alert(e.message); }
+    var res=await fetch('/catalog/set-image?client=RE&seq='+encodeURIComponent(activeSeq)+'&url='+encodeURIComponent(c.pushUrl)+'&thumb='+encodeURIComponent(c.thumb||''),{method:'POST'});
+    var j=await res.json().catch(function(){ return {}; });
+    if(res.ok){ updateRowThumb(activeTr, j.url||c.pushUrl); closeGallery(); }
+    else { if(btn){ btn.disabled=false; btn.textContent='Use as image'; } alert('Error '+(j.error||res.status)); }
+  }catch(e){ if(btn){ btn.disabled=false; btn.textContent='Use as image'; } alert(e.message); }
+}
+// Update (or create, if the row had no image) the row thumbnail + status badge + url cell in place.
+function updateRowThumb(tr, url){
+  if(!tr) return;
+  var cell=tr.querySelector('.showcell'); if(!cell) return;
+  var cap=activeCap||tr.getAttribute('data-item')||'';
+  var th=tr.querySelector('.thumb');
+  if(th){ th.src=url; th.setAttribute('data-url', url); }
+  else{
+    var img=document.createElement('img'); img.className='thumb'; img.src=url; img.alt=''; img.title='Click to enlarge';
+    img.setAttribute('data-url', url); img.setAttribute('data-cap', cap); img.setAttribute('loading','lazy');
+    img.addEventListener('click', function(){ showSingle(url, cap, tr); });
+    var span=cell.querySelector('.nothumb'); if(span) span.replaceWith(img); else cell.insertBefore(img, cell.firstChild);
+  }
+  var badge=tr.querySelector('.badge'); if(badge){ badge.textContent='ENRICHED'; badge.style.background='#166534'; }
+  tr.setAttribute('data-status','ENRICHED');
+  var u=tr.querySelector('.url'); if(u){ u.href=url; u.textContent=url; }
+}
+// Hide the gallery/preview and reset to the default catalog view.
+function closeGallery(){
+  var g=document.getElementById('gallery'); g.style.display='none'; g.innerHTML='';
+  var pv=document.getElementById('pv'); pv.style.display='none'; pv.removeAttribute('src');
+  document.getElementById('pvempty').style.display='flex';
+  document.getElementById('pvcap').textContent=''; document.getElementById('pvlink').style.display='none';
+  setActive(null); activeSeq=null; activeTr=null; activeCap='';
 }
 async function clearImg(){
+  var seq=activeSeq, tr=activeTr;
   try{
-    var res=await fetch('/catalog/clear-image?client=RE&seq='+encodeURIComponent(activeSeq),{method:'POST'});
+    var res=await fetch('/catalog/clear-image?client=RE&seq='+encodeURIComponent(seq),{method:'POST'});
     if(res.ok){
-      var th=activeTr.querySelector('.thumb'); if(th){ var d=document.createElement('span'); d.className='nothumb'; d.textContent='—'; th.replaceWith(d); }
-      var badge=activeTr.querySelector('.badge'); if(badge){ badge.textContent='NO_IMAGE'; badge.style.background='#b45309'; }
-      var u=activeTr.querySelector('.url'); if(u) u.remove();
-      document.getElementById('gallery').style.display='none'; document.getElementById('pvempty').style.display='flex';
+      if(tr){
+        var th=tr.querySelector('.thumb'); if(th){ var d=document.createElement('span'); d.className='nothumb'; d.textContent='—'; th.replaceWith(d); }
+        var badge=tr.querySelector('.badge'); if(badge){ badge.textContent='NO_IMAGE'; badge.style.background='#b45309'; }
+        tr.setAttribute('data-status','NO_IMAGE');
+        var u=tr.querySelector('.url'); if(u) u.remove();
+      }
+      closeGallery();
     } else alert('Error '+res.status);
   }catch(e){ alert(e.message); }
 }
@@ -690,7 +765,7 @@ export async function setVariationImage(
   chosenUrl: string,
   thumbUrl: string,
   opts: { ops?: ImageEditOps } = {},
-): Promise<{ ok: boolean }> {
+): Promise<{ ok: boolean; url?: string }> {
   const ops = opts.ops ?? liveImageEditOps(await loadSquareConfig(db, clientId));
   const { rows } = await db.query(
     `select square_variation_id, item_name, square_image_id from catalog_mapping where client_id = $1 and seq = $2`,
@@ -711,12 +786,16 @@ export async function setVariationImage(
     contentType: dl.contentType,
     sourceUrl: dl.url,
   });
+  // Store Square's hosted URL (not the source): the source may be hotlink-protected and fail to
+  // render as a thumbnail, whereas Square's CDN copy always loads. Returned so the client can
+  // refresh the row thumbnail immediately without a page reload.
+  const storedUrl = attached.url || dl.url;
   await db.query(
     `update catalog_mapping set status = 'ENRICHED', image_url = $3, square_image_id = $4, updated_at = now()
        where client_id = $1 and seq = $2`,
-    [clientId, seq, dl.url, attached.imageId],
+    [clientId, seq, storedUrl, attached.imageId],
   );
-  return { ok: true };
+  return { ok: true, url: storedUrl };
 }
 
 /**

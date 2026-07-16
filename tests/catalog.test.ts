@@ -75,10 +75,12 @@ test('getCatalogRows flags rows that kept a candidate pool', async () => {
 test('renderCatalogPage gives a thumbnail + Review-alternatives to rows with candidates', async () => {
   const db = await seeded();
   await addRow(db, { sku: 'S1', vid: 'V1', status: 'ENRICHED', imageUrl: 'https://p/1.jpg', imageId: 'IMG1', candidates: CANDS });
+  await addRow(db, { sku: 'S2', vid: 'V2', status: 'NO_IMAGE' }); // no candidate pool
   const html = renderCatalogPage(await getCatalogRows(db as unknown as Queryable, 'RE'));
   assert.match(html, /id="preview"/);
   assert.match(html, /class="thumb" src="https:\/\/p\/1\.jpg"/);
-  assert.match(html, /class="alts" data-seq="/); // review-alternatives button
+  assert.match(html, /class="alts" data-seq="/); // review-alternatives button for the row with candidates
+  assert.match(html, /class="noalts"[^>]*>No alternatives</); // label for the row without candidates
   assert.match(html, /id="gallery"/); // gallery container in the preview area
 });
 
@@ -127,6 +129,7 @@ test('setVariationImage swaps the Square image and marks ENRICHED', async () => 
   const { ops, calls } = fakeEditOps();
   const r = await setVariationImage(db as unknown as Queryable, 'RE', seq, 'https://p/2.jpg', 'https://t/2.jpg', { ops });
   assert.equal(r.ok, true);
+  assert.equal(r.url, 'https://sq/new.jpg'); // returns Square's hosted URL for immediate thumbnail refresh
   assert.deepEqual(calls.deleted, ['IMG_OLD']); // old image removed first
   assert.deepEqual(calls.downloaded, ['https://p/2.jpg']);
   assert.equal(calls.attached, 1);
@@ -136,7 +139,7 @@ test('setVariationImage swaps the Square image and marks ENRICHED', async () => 
     )
   ).rows[0]!;
   assert.equal(row.status, 'ENRICHED');
-  assert.equal(row.image_url, 'https://p/2.jpg');
+  assert.equal(row.image_url, 'https://sq/new.jpg'); // Square CDN copy stored (not the hotlink-prone source)
   assert.equal(row.square_image_id, 'IMG_NEW');
 });
 
