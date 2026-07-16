@@ -114,7 +114,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
       const alts = r.hasCandidates
         ? `<button class="alts" data-seq="${esc(r.seq)}" data-cap="${esc(caption)}">Review alternatives</button>`
         : '';
-      return `<tr id="row-${esc(r.seq)}">
+      return `<tr id="row-${esc(r.seq)}" data-seq="${esc(r.seq)}" data-sku="${esc(r.vendorSku)}" data-item="${esc(r.itemName)}" data-variation="${esc(r.variationName)}">
         <td class="chkcell"><input type="checkbox" class="rowchk" data-seq="${esc(r.seq)}"></td>
         <td class="showcell">${thumb}${useItem}</td>
         <td class="editcell">
@@ -186,6 +186,20 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   input.edit,select.edit{font:inherit;font-size:12px;padding:.2rem .3rem;border:1px solid #d1d5db;border-radius:4px;width:100%;box-sizing:border-box}
   input.ename{font-weight:600}
   .itemlink{color:#2563eb;text-decoration:none;font-size:12px;margin-left:2px}
+  #bulkphotos{border-color:#7c3aed;background:#fff;color:#7c3aed}
+  #phototray{position:sticky;top:44px;z-index:6;background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:.6rem;margin-bottom:.5rem}
+  .trayhead{font-size:13px;color:#374151;margin-bottom:.5rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+  .trayhead button{font:inherit;font-size:12px;padding:.3rem .7rem;border-radius:6px;cursor:pointer;border:1px solid #7c3aed;background:#7c3aed;color:#fff}
+  .trayhead .traycancel{border-color:#9ca3af;background:#fff;color:#374151}
+  .trayhead button:disabled{opacity:.5}
+  .strip{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
+  .pcell{flex:0 0 96px;border:2px solid #e9d5ff;border-radius:8px;padding:4px;background:#fff;cursor:grab;text-align:center}
+  .pcell.matched{border-color:#16a34a;background:#f0fdf4}
+  .pthumb{width:86px;height:70px;object-fit:cover;border-radius:4px;display:block}
+  .pcap{font-size:9px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+  .ptgt{font-size:9.5px;font-weight:600;color:#166534;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pcell:not(.matched) .ptgt{color:#b45309}
+  tr.droptarget{outline:2px dashed #7c3aed;outline-offset:-2px;background:#faf5ff}
   input.eprice{width:74px}
   .edesc{margin-top:3px;color:#374151}
   tr.dirty{background:#fffbeb} tr.dirty td{border-bottom-color:#fde68a}
@@ -207,12 +221,15 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
     <select id="bulkcat">${bulkCatOptions}</select>
     <button id="bulkapply" disabled>Set on selected (0)</button>
     <button id="synccat" title="Fill the category column from the live Square catalog">Sync categories</button>
+    <button id="bulkphotos" title="Upload a batch of photos; auto-match by filename, drag the rest onto rows">Bulk photos…</button>
+    <input type="file" id="photofiles" accept="image/*" multiple hidden>
     <span class="sep"></span>
     <span id="dirtycount">No changes</span>
     <button id="pushbtn" disabled>Push changes to Square</button>
     <a class="patlink" href="/catalog/edits">Corrections &amp; patterns →</a>
     <span id="pushstatus"></span>
   </div>
+  <div id="phototray" hidden></div>
   <table>
     <thead><tr><th><input type="checkbox" id="chkall"></th><th></th><th>Item &amp; description</th><th>Variation</th><th>Category</th><th>Vendor</th><th>SKU</th><th>Wholesale</th><th>Retail</th><th>Status</th><th></th></tr></thead>
     <tbody>${body}</tbody>
@@ -366,6 +383,67 @@ document.querySelectorAll('.edit').forEach(function(el){
     if(target){ target.focus(); if(target.select){ try{ target.select(); }catch(e){} } }
   });
 });
+
+// --- Bulk photos: filmstrip tray, filename auto-match, drag-to-assign, review then apply ---
+var pAssign={}, pFiles={};
+function pnorm(s){ return (s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+function pRows(){ return Array.prototype.map.call(document.querySelectorAll('tbody tr'), function(tr){ return { seq:tr.getAttribute('data-seq'), sku:pnorm(tr.getAttribute('data-sku')), item:pnorm(tr.getAttribute('data-item')), variation:pnorm(tr.getAttribute('data-variation')) }; }); }
+function pMatch(fname, rows){
+  var base=pnorm(fname.replace(/\\.[^.]+$/,'')); if(!base) return null;
+  for(var i=0;i<rows.length;i++){ var r=rows[i]; if(r.sku && (base.indexOf(r.sku)>=0 || r.sku.indexOf(base)>=0)) return r.seq; }
+  for(var j=0;j<rows.length;j++){ var r2=rows[j]; if(r2.variation && base.indexOf(r2.variation)>=0 && (!r2.item || base.indexOf(r2.item)>=0)) return r2.seq; }
+  return null;
+}
+function pLabel(seq){ var tr=document.querySelector('tr[data-seq="'+seq+'"]'); return tr? ('→ '+((tr.getAttribute('data-item')||'')+' · '+(tr.getAttribute('data-variation')||'')).slice(0,26)) : ('→ '+seq); }
+function pCount(){ var n=Object.keys(pAssign).length, b=document.getElementById('applyphotos'); if(b){ b.textContent='Apply '+n+' matched'; b.disabled=n===0; } }
+document.getElementById('bulkphotos').addEventListener('click', function(){ document.getElementById('photofiles').click(); });
+document.getElementById('photofiles').addEventListener('change', function(){
+  var files=Array.prototype.slice.call(this.files||[]); this.value=''; if(!files.length) return;
+  pAssign={}; pFiles={};
+  var rows=pRows(), tray=document.getElementById('phototray'); tray.innerHTML=''; tray.hidden=false;
+  var head=document.createElement('div'); head.className='trayhead';
+  var lbl=document.createElement('span'); lbl.innerHTML='<strong>'+files.length+' photos</strong> — auto-matched by filename; drag any unmatched onto a row, then apply.';
+  var apply=document.createElement('button'); apply.id='applyphotos';
+  var cancel=document.createElement('button'); cancel.className='traycancel'; cancel.textContent='Cancel';
+  head.appendChild(lbl); head.appendChild(apply); head.appendChild(cancel); tray.appendChild(head);
+  var strip=document.createElement('div'); strip.className='strip';
+  files.forEach(function(f,i){
+    var id='p'+i; pFiles[id]=f; var seq=pMatch(f.name, rows); if(seq) pAssign[id]=seq;
+    var cell=document.createElement('div'); cell.className='pcell'+(seq?' matched':''); cell.setAttribute('data-fid',id); cell.draggable=true;
+    var im=document.createElement('img'); im.className='pthumb'; im.src=URL.createObjectURL(f); cell.appendChild(im);
+    var cap=document.createElement('div'); cap.className='pcap'; cap.textContent=f.name; cell.appendChild(cap);
+    var tgt=document.createElement('div'); tgt.className='ptgt'; tgt.textContent=seq?pLabel(seq):'unmatched'; cell.appendChild(tgt);
+    cell.addEventListener('dragstart', function(e){ e.dataTransfer.setData('text/fid', id); });
+    strip.appendChild(cell);
+  });
+  tray.appendChild(strip);
+  apply.addEventListener('click', pApply);
+  cancel.addEventListener('click', function(){ tray.hidden=true; tray.innerHTML=''; document.querySelectorAll('tbody tr').forEach(function(t){t.classList.remove('droptarget');}); });
+  document.querySelectorAll('tbody tr').forEach(function(tr){
+    tr.addEventListener('dragover', function(e){ e.preventDefault(); tr.classList.add('droptarget'); });
+    tr.addEventListener('dragleave', function(){ tr.classList.remove('droptarget'); });
+    tr.addEventListener('drop', function(e){
+      e.preventDefault(); tr.classList.remove('droptarget');
+      var fid=e.dataTransfer.getData('text/fid'); if(!fid) return;
+      pAssign[fid]=tr.getAttribute('data-seq');
+      var c=document.querySelector('.pcell[data-fid="'+fid+'"]'); if(c){ c.classList.add('matched'); c.querySelector('.ptgt').textContent=pLabel(pAssign[fid]); }
+      pCount();
+    });
+  });
+  pCount();
+});
+async function pApply(){
+  var b=document.getElementById('applyphotos'); b.disabled=true;
+  var ids=Object.keys(pAssign), done=0, errs=0;
+  for(var i=0;i<ids.length;i++){
+    var f=pFiles[ids[i]], seq=pAssign[ids[i]];
+    try{ var buf=await f.arrayBuffer(); var res=await fetch('/catalog/upload-image?seq='+encodeURIComponent(seq),{method:'POST',headers:{'content-type':f.type||'application/octet-stream'},body:buf}); if(res.ok) done++; else errs++; }
+    catch(e){ errs++; }
+    b.textContent='Uploading '+(done+errs)+'/'+ids.length+'…';
+  }
+  b.textContent='Done — '+done+' applied'+(errs?', '+errs+' failed':'')+'. Reloading…';
+  setTimeout(function(){ location.reload(); }, 900);
+}
 
 // Fill the category column from Square, then reload to show it.
 var sc=document.getElementById('synccat');

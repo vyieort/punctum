@@ -92,6 +92,9 @@ test('renderCatalogPage renders the edit grid: editable cells, category options,
   assert.match(html, /id="pushbtn"/); // push-to-Square button
   assert.match(html, /id="bulkapply"/); // bulk-category control
   assert.match(html, /href="\/catalog\/edits"/); // link to the patterns report
+  assert.match(html, /id="bulkphotos"/); // bulk-photo filmstrip trigger
+  assert.match(html, /id="phototray"/); // filmstrip tray container
+  assert.match(html, /data-sku="S1"/); // row carries data for filename matching
 });
 
 test('getCandidates returns the parsed pool + the base item name', async () => {
