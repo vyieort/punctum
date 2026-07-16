@@ -33,6 +33,9 @@ import { renderPatternsPage } from './review/patterns-page.js';
 import { syncCategoryPaths } from './jobs/category-sync.js';
 import { getClientSettings, setAutoEnrichImages } from './lib/client-settings.js';
 import { renderSettingsPage } from './review/settings-page.js';
+import { randomUUID } from 'node:crypto';
+import { oauthConfigFromEnv, squareAuthorizeUrl, exchangeCode } from './auth/square-oauth.js';
+import { saveSquareAccount, getSquareConnection } from './lib/square-account.js';
 import { passwordLogin, refreshSession } from './auth/gotrue.js';
 import { getUser, getSession, verifyAccessToken, ACCESS_COOKIE, REFRESH_COOKIE } from './auth/session.js';
 import { resolveClientForUser, parseCookies } from './auth/tenant.js';
@@ -714,9 +717,10 @@ const server = createServer(async (req, res) => {
   // Per-client settings (auto-enrich toggle).
   if (url.pathname === '/settings' && req.method === 'GET') {
     try {
-      const s = await getClientSettings(getPool() as unknown as Queryable, authedClient);
+      const pool = getPool() as unknown as Queryable;
+      const [s, conn] = await Promise.all([getClientSettings(pool, authedClient), getSquareConnection(pool, authedClient)]);
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(renderSettingsPage(s));
+      res.end(renderSettingsPage(s, conn, url.searchParams.get('square')));
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }
@@ -730,6 +734,51 @@ const server = createServer(async (req, res) => {
       sendJson(res, 200, { ok: true });
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  // Square OAuth: start -> set a CSRF state cookie and redirect the studio to Square to authorize.
+  if (url.pathname === '/oauth/square/start' && req.method === 'GET') {
+    try {
+      const cfg = oauthConfigFromEnv();
+      const state = randomUUID();
+      res.writeHead(302, {
+        location: squareAuthorizeUrl(cfg, state),
+        'set-cookie': `sq_state=${state}; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=600`,
+      });
+      res.end();
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+  // Square OAuth: callback -> verify state, exchange code, read the merchant's location, store it.
+  if (url.pathname === '/oauth/square/callback' && req.method === 'GET') {
+    try {
+      const code = url.searchParams.get('code');
+      const state = url.searchParams.get('state');
+      const cookies = parseCookies(req.headers.cookie);
+      if (!code || !state || state !== cookies.sq_state) {
+        res.writeHead(302, { location: '/settings?square=error' });
+        res.end();
+        return;
+      }
+      const cfg = oauthConfigFromEnv();
+      const tokens = await exchangeCode(cfg, code);
+      let locationId: string | null = null;
+      try {
+        const locs = await listLocations({ token: tokens.accessToken, env: cfg.env, locationId: '' });
+        locationId = locs[0]?.id ?? null;
+      } catch {
+        /* connect still succeeds; location can be re-synced later */
+      }
+      await saveSquareAccount(getPool() as unknown as Queryable, authedClient, cfg.env, tokens, locationId);
+      res.writeHead(302, { location: '/settings?square=connected', 'set-cookie': 'sq_state=; Path=/; Max-Age=0' });
+      res.end();
+    } catch {
+      res.writeHead(302, { location: '/settings?square=error' });
+      res.end();
     }
     return;
   }
