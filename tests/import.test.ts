@@ -6,6 +6,8 @@ import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import type { Queryable } from '../src/jobs/pg-rows.js';
 import { runImport, recoverStuckImports, type SquareOps } from '../src/jobs/import.js';
+import { loadClassifiedProducts } from '../src/jobs/import-preview.js';
+import { markLinesExcluded } from '../src/review/store.js';
 
 const mig = (f: string): string => readFileSync(new URL(`../db/migrations/${f}`, import.meta.url), 'utf8');
 const INV = '00000000-0000-0000-0000-0000000000bb';
@@ -20,6 +22,7 @@ async function seeded(): Promise<PGlite> {
   await db.exec(mig('0003_line_classification.sql'));
   await db.exec(mig('0009_catalog_edits.sql'));
   await db.exec(mig('0010_invoice_error_detail.sql'));
+  await db.exec(mig('0013_line_excluded.sql'));
   await db.exec(`insert into clients (id,name) values ('RE','Ritual Evolution')`);
   await db.exec(
     `insert into client_config (client_id, pricing_rules) values ('RE',
@@ -174,6 +177,28 @@ test('a failed push persists error_detail on the invoice (so the review page can
   const detail = JSON.parse(inv.rows[0]!.error_detail ?? '[]') as Array<{ item: string; error: string }>;
   assert.ok(detail.length > 0);
   assert.match(detail[0]!.error, /duplicate SKU/);
+});
+
+test('loadClassifiedProducts skips excluded product lines', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  assert.equal((await loadClassifiedProducts(q, INV)).items.length, 2);
+  await db.query(`update invoice_lines set excluded = true where invoice_id = $1 and synthetic_sku = 'NEO-1'`, [INV]);
+  assert.equal((await loadClassifiedProducts(q, INV)).items.length, 1);
+});
+
+test('markLinesExcluded sets exactly the given lines (re-mark resets the rest)', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  const rows = (await db.query<{ id: string; sku: string }>(`select id, synthetic_sku as sku from invoice_lines where invoice_id = $1 and is_product order by line_no`, [INV])).rows;
+  const neo1 = rows.find((r) => r.sku === 'NEO-1')!.id;
+  const neo2 = rows.find((r) => r.sku === 'NEO-2')!.id;
+  await markLinesExcluded(q, INV, [neo1]);
+  assert.equal((await loadClassifiedProducts(q, INV)).items.length, 1);
+  await markLinesExcluded(q, INV, [neo2]); // re-mark: neo1 comes back, neo2 out
+  assert.equal((await loadClassifiedProducts(q, INV)).items.length, 1);
+  await markLinesExcluded(q, INV, []); // clear all
+  assert.equal((await loadClassifiedProducts(q, INV)).items.length, 2);
 });
 
 test('recoverStuckImports re-runs every invoice left in importing', async () => {

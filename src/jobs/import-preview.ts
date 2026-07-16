@@ -33,11 +33,12 @@ export async function loadClassifiedProducts(db: Queryable, invoiceId: string): 
   if (inv.rows.length === 0) throw new Error(`invoice ${invoiceId} not found`);
   const vendor = String((inv.rows[0] as { vendor: string | null }).vendor ?? '');
   const l = await db.query(
-    `select classification, is_product from invoice_lines where invoice_id = $1 order by line_no nulls last, created_at`,
+    `select classification, is_product, coalesce(excluded, false) as excluded
+       from invoice_lines where invoice_id = $1 order by line_no nulls last, created_at`,
     [invoiceId],
   );
-  const items = (l.rows as Array<{ classification: unknown; is_product: boolean }>)
-    .filter((r) => r.is_product !== false)
+  const items = (l.rows as Array<{ classification: unknown; is_product: boolean; excluded: boolean }>)
+    .filter((r) => r.is_product !== false && r.excluded !== true)
     .map((r) => (typeof r.classification === 'string' ? JSON.parse(r.classification) : r.classification) as ClassifiedItem);
   return { vendor, items };
 }

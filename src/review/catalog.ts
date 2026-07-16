@@ -123,7 +123,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
         <td class="showcell">${thumb}${useItem}</td>
         <td class="editcell">
           <input class="ename edit" data-seq="${esc(r.seq)}" data-field="itemName" data-orig="${esc(r.itemName)}" data-canon="${esc(r.itemName)}" value="${esc(r.itemName)}">
-          ${r.squareItemId ? `<a class="itemlink" href="/items/${esc(r.squareItemId)}" title="Open item detail page">&#8599;</a>` : ''}<span class="warn" title="Off the naming convention — logged for review">&#9888;</span>
+          ${r.squareItemId ? `<a class="itemlink" href="/items/${esc(r.squareItemId)}" title="Open the item detail page (edit + photos)">details &#8599;</a>` : ''}<span class="warn" title="Off the naming convention — logged for review">&#9888;</span>
           <div class="canon">convention: ${esc(r.itemName) || '—'}</div>
           <input class="edesc edit" data-seq="${esc(r.seq)}" data-field="description" data-orig="${esc(r.description)}" value="${esc(r.description)}" placeholder="description…">
           ${r.tags ? `<div class="tags">${esc(r.tags)}</div>` : ''}
@@ -189,9 +189,10 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   .editcell{min-width:230px}
   input.edit,select.edit{font:inherit;font-size:12px;padding:.2rem .3rem;border:1px solid #d1d5db;border-radius:4px;width:100%;box-sizing:border-box}
   input.ename{font-weight:600}
-  .itemlink{color:#2563eb;text-decoration:none;font-size:12px;margin-left:2px}
+  .itemlink{color:#2563eb;text-decoration:none;font-size:11px;font-weight:600;margin-left:4px}
+  .itemlink:hover{text-decoration:underline}
   #bulkphotos{border-color:#7c3aed;background:#fff;color:#7c3aed}
-  #phototray{background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:.6rem;margin-bottom:.5rem}
+  #phototray{position:sticky;top:52px;z-index:5;background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:.6rem;margin-bottom:.5rem;max-height:38vh;overflow:auto}
   .trayhead{font-size:13px;color:#374151;margin-bottom:.5rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
   .trayhead button{font:inherit;font-size:12px;padding:.3rem .7rem;border-radius:6px;cursor:pointer;border:1px solid #7c3aed;background:#7c3aed;color:#fff}
   .trayhead .traycancel{border-color:#9ca3af;background:#fff;color:#374151}
@@ -205,6 +206,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   @keyframes pspin{to{transform:rotate(360deg)}}
   .pcell.matched{border-color:#16a34a;background:#f0fdf4}
   .pthumb{width:86px;height:70px;object-fit:cover;border-radius:4px;display:block}
+  .pheic{display:flex;align-items:center;justify-content:center;background:#ede9fe;color:#7c3aed;font-size:11px;font-weight:700}
   .pcap{font-size:9px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
   .ptgt{font-size:9.5px;font-weight:600;color:#166534;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .pcell:not(.matched) .ptgt{color:#b45309}
@@ -398,7 +400,7 @@ document.querySelectorAll('.edit').forEach(function(el){
 });
 
 // --- Bulk photos: filmstrip tray, filename auto-match, drag-to-assign, review then apply ---
-var pAssign={}, pFiles={};
+var pAssign={}, pFiles={}, pN=0;
 function pnorm(s){ return (s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
 function pRows(){ return Array.prototype.map.call(document.querySelectorAll('tbody tr'), function(tr){ return { seq:tr.getAttribute('data-seq'), sku:pnorm(tr.getAttribute('data-sku')), item:pnorm(tr.getAttribute('data-item')), variation:pnorm(tr.getAttribute('data-variation')) }; }); }
 function pMatch(fname, rows){
@@ -410,29 +412,26 @@ function pMatch(fname, rows){
 function pLabel(seq){ var tr=document.querySelector('tr[data-seq="'+seq+'"]'); return tr? ('→ '+((tr.getAttribute('data-item')||'')+' · '+(tr.getAttribute('data-variation')||'')).slice(0,26)) : ('→ '+seq); }
 function pCount(){ var n=Object.keys(pAssign).length, b=document.getElementById('applyphotos'); if(b){ b.textContent='Apply '+n+' matched'; b.disabled=n===0; } }
 document.getElementById('bulkphotos').addEventListener('click', function(){ document.getElementById('photofiles').click(); });
-document.getElementById('photofiles').addEventListener('change', function(){
-  var files=Array.prototype.slice.call(this.files||[]); this.value=''; if(!files.length) return;
-  pAssign={}; pFiles={};
-  var rows=pRows(), tray=document.getElementById('phototray'); tray.innerHTML=''; tray.hidden=false;
-  var head=document.createElement('div'); head.className='trayhead';
-  var lbl=document.createElement('span'); lbl.innerHTML='<strong>'+files.length+' photos</strong> — auto-matched by filename; drag any unmatched onto a row, then apply.';
-  var apply=document.createElement('button'); apply.id='applyphotos';
-  var cancel=document.createElement('button'); cancel.className='traycancel'; cancel.textContent='Cancel';
-  head.appendChild(lbl); head.appendChild(apply); head.appendChild(cancel); tray.appendChild(head);
-  var strip=document.createElement('div'); strip.className='strip';
-  files.forEach(function(f,i){
-    var id='p'+i; pFiles[id]=f; var seq=pMatch(f.name, rows); if(seq) pAssign[id]=seq;
-    var cell=document.createElement('div'); cell.className='pcell'+(seq?' matched':''); cell.setAttribute('data-fid',id); cell.draggable=true;
-    var im=document.createElement('img'); im.className='pthumb'; im.src=URL.createObjectURL(f); cell.appendChild(im);
-    var cap=document.createElement('div'); cap.className='pcap'; cap.textContent=f.name; cell.appendChild(cap);
-    var tgt=document.createElement('div'); tgt.className='ptgt'; tgt.textContent=seq?pLabel(seq):'unmatched'; cell.appendChild(tgt);
-    cell.addEventListener('dragstart', function(e){ e.dataTransfer.setData('text/fid', id); });
-    strip.appendChild(cell);
-  });
-  tray.appendChild(strip);
-  apply.addEventListener('click', pApply);
-  cancel.addEventListener('click', function(){ tray.hidden=true; tray.innerHTML=''; document.querySelectorAll('tbody tr').forEach(function(t){t.classList.remove('droptarget');}); });
+// Thumbnail: browsers can't render HEIC/HEIF in <img> (Chromium especially) -> fall back to a
+// label placeholder on error, so the strip never shows a broken image. (Upload still works — the
+// server converts HEIC.)
+function pThumb(f){
+  var im=document.createElement('img'); im.className='pthumb';
+  im.onerror=function(){ var ph=document.createElement('div'); ph.className='pthumb pheic'; ph.textContent=((f.name.split('.').pop())||'IMG').toUpperCase(); if(im.parentNode) im.parentNode.replaceChild(ph, im); };
+  im.src=URL.createObjectURL(f); return im;
+}
+function pAddCell(strip, f, rows){
+  var id='p'+(pN++); pFiles[id]=f; var seq=pMatch(f.name, rows); if(seq) pAssign[id]=seq;
+  var cell=document.createElement('div'); cell.className='pcell'+(seq?' matched':''); cell.setAttribute('data-fid',id); cell.draggable=true;
+  cell.appendChild(pThumb(f));
+  var cap=document.createElement('div'); cap.className='pcap'; cap.textContent=f.name; cell.appendChild(cap);
+  var tgt=document.createElement('div'); tgt.className='ptgt'; tgt.textContent=seq?pLabel(seq):'unmatched'; cell.appendChild(tgt);
+  cell.addEventListener('dragstart', function(e){ e.dataTransfer.setData('text/fid', id); });
+  strip.appendChild(cell);
+}
+function pWireDrops(){
   document.querySelectorAll('tbody tr').forEach(function(tr){
+    if(tr.getAttribute('data-pdrop')) return; tr.setAttribute('data-pdrop','1');
     tr.addEventListener('dragover', function(e){ e.preventDefault(); tr.classList.add('droptarget'); });
     tr.addEventListener('dragleave', function(){ tr.classList.remove('droptarget'); });
     tr.addEventListener('drop', function(e){
@@ -443,7 +442,26 @@ document.getElementById('photofiles').addEventListener('change', function(){
       pCount();
     });
   });
-  pCount();
+}
+function pRelabel(){ var n=Object.keys(pFiles).length, l=document.getElementById('praylbl'); if(l) l.innerHTML='<strong>'+n+' photo'+(n===1?'':'s')+'</strong> — auto-matched by filename; drag any unmatched onto a row, then apply.'; }
+document.getElementById('photofiles').addEventListener('change', function(){
+  var files=Array.prototype.slice.call(this.files||[]); this.value=''; if(!files.length) return;
+  var tray=document.getElementById('phototray'), rows=pRows();
+  // Append to the existing strip if it's open; otherwise start a fresh one.
+  if(tray.hidden || !document.getElementById('pstrip')){
+    pAssign={}; pFiles={}; pN=0; tray.innerHTML=''; tray.hidden=false;
+    var head=document.createElement('div'); head.className='trayhead';
+    var lbl=document.createElement('span'); lbl.id='praylbl';
+    var apply=document.createElement('button'); apply.id='applyphotos';
+    var cancel=document.createElement('button'); cancel.className='traycancel'; cancel.textContent='Cancel';
+    head.appendChild(lbl); head.appendChild(apply); head.appendChild(cancel); tray.appendChild(head);
+    var strip=document.createElement('div'); strip.className='strip'; strip.id='pstrip'; tray.appendChild(strip);
+    apply.addEventListener('click', pApply);
+    cancel.addEventListener('click', function(){ tray.hidden=true; tray.innerHTML=''; document.querySelectorAll('tbody tr').forEach(function(t){t.classList.remove('droptarget');}); });
+  }
+  var strip2=document.getElementById('pstrip');
+  files.forEach(function(f){ pAddCell(strip2, f, rows); });
+  pWireDrops(); pRelabel(); pCount();
 });
 function pmark(fid, txt, cls){
   var cell=document.querySelector('.pcell[data-fid="'+fid+'"]'); if(!cell) return;
@@ -470,7 +488,9 @@ function downscale(file, maxPx, quality){
 }
 async function pApply(){
   var b=document.getElementById('applyphotos'); b.disabled=true;
-  var ids=Object.keys(pAssign), done=0, errs=0;
+  // Upload in the order the photos appear in the strip (DOM order), not assignment order.
+  var ids=Array.prototype.map.call(document.querySelectorAll('#pstrip .pcell'), function(c){ return c.getAttribute('data-fid'); }).filter(function(id){ return pAssign[id]; });
+  var done=0, errs=0;
   for(var i=0;i<ids.length;i++){
     var id=ids[i], seq=pAssign[id], f=pFiles[id];
     pmark(id,'','busy'); // spinner overlay on this photo while it uploads

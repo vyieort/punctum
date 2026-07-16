@@ -21,6 +21,7 @@ async function seeded(): Promise<PGlite> {
   await db.exec(mig('0007_status_processing.sql'));
   await db.exec(mig('0008_invoice_queue_cols.sql'));
   await db.exec(mig('0010_invoice_error_detail.sql'));
+  await db.exec(mig('0013_line_excluded.sql'));
   await db.exec(`insert into clients (id,name) values ('RE','Ritual Evolution')`);
   await db.exec(`insert into invoices (id, client_id, vendor, invoice_number, invoice_date, total, status)
     values ('${INV}','RE','BVLA','INV-DEMO-001','2026-07-11',412.50,'in_review')`);
@@ -30,13 +31,14 @@ async function seeded(): Promise<PGlite> {
   return db;
 }
 
-test('review page is fully read-only (no inputs) and shows the parsed lines', async () => {
+test('review page keeps parsed data read-only but offers per-line exclude + shows the lines', async () => {
   const db = await seeded();
   const data = await getInvoiceForReview(db as unknown as Queryable, INV);
   const out = renderReviewPage(data!);
   assert.match(out, /18G Muse Seam Ring/);
   assert.match(out, /Shipping/);
-  assert.doesNotMatch(out, /<input/); // read-only — no editable fields
+  assert.doesNotMatch(out, /<input[^>]*type="(text|number)"/); // parsed data is not editable here
+  assert.match(out, /class="excl"/); // per-line exclude checkboxes (the only inputs)
   assert.match(out, /\/approve/);
   assert.match(out, /\/reject/);
 });

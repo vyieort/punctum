@@ -112,6 +112,16 @@ export async function approveInvoice(db: Queryable, invoiceId: string): Promise<
   return r.rows.length > 0;
 }
 
+/** Set exactly the given line ids as excluded (the rest included) for this invoice — reflects the
+ *  reviewer's current selection, so unchecking on a re-approve un-excludes. Excluded lines are
+ *  skipped by the import. */
+export async function markLinesExcluded(db: Queryable, invoiceId: string, lineIds: string[]): Promise<void> {
+  await db.query(`update invoice_lines set excluded = false where invoice_id = $1`, [invoiceId]);
+  if (lineIds.length > 0) {
+    await db.query(`update invoice_lines set excluded = true where invoice_id = $1 and id = any($2::uuid[])`, [invoiceId, lineIds]);
+  }
+}
+
 /** Reject = send the invoice back for re-parse (fix at the source, not by hand-editing). */
 export async function rejectInvoice(db: Queryable, invoiceId: string): Promise<boolean> {
   const r = await db.query(`update invoices set status = 'needs_review' where id = $1 returning id`, [invoiceId]);

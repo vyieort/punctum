@@ -38,6 +38,7 @@ export function renderReviewPage(data: InvoiceForReview): string {
   const flaggedCount = lines.filter((l) => l.flags.length > 0).length;
   const productCount = lines.filter((l) => l.is_product).length;
   const hasUnclassified = lines.some((l) => l.flags.includes('unclassified'));
+  const canExclude = status === 'in_review'; // only offer exclude while awaiting approval
   const rows = lines
     .map((l) => {
       const flagged = l.flags.length > 0;
@@ -52,6 +53,7 @@ export function renderReviewPage(data: InvoiceForReview): string {
       <td>${esc(l.synthetic_sku)}</td>
       ${showBackorder ? `<td class="ctr">${l.backorder ? 'Yes' : '&mdash;'}</td>` : ''}
       <td class="ctr">${l.is_product ? '&#10003;' : '&mdash;'}</td>
+      ${canExclude ? `<td class="ctr">${l.is_product ? `<input type="checkbox" class="excl" data-line="${esc(l.id)}" title="Skip this line — don't create a catalog item for it">` : ''}</td>` : ''}
     </tr>`;
     })
     .join('');
@@ -100,16 +102,17 @@ ${status === 'importing' ? '<meta http-equiv="refresh" content="4">' : ''}
       ${flaggedCount ? `<div class="flagsummary">&#9888; ${flaggedCount} of ${productCount} product line${productCount === 1 ? '' : 's'} flagged to double-check &mdash; highlighted below.</div>` : ''}
       ${hasUnclassified ? `<div class="pushnote">&#8505; An uncategorized item can still be approved &mdash; it imports into the <strong>Flag For Review</strong> category, then you set its category on the <a href="/catalog">catalog</a> page. No need to reject the whole invoice.</div>` : ''}
       <table>
-        <thead><tr><th>#</th><th>Description</th><th>Qty</th><th>Wholesale</th><th>Gems</th><th>Notes</th><th>SKU</th>${showBackorder ? '<th>Back order</th>' : ''}<th>Product?</th></tr></thead>
+        <thead><tr><th>#</th><th>Description</th><th>Qty</th><th>Wholesale</th><th>Gems</th><th>Notes</th><th>SKU</th>${showBackorder ? '<th>Back order</th>' : ''}<th>Product?</th>${canExclude ? '<th class="ctr">Exclude</th>' : ''}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
       ${
         status === 'in_review'
           ? `<div class="actions">
-        <form method="post" action="/invoices/${esc(invoice.id)}/approve" onsubmit="return lock(this)"><button class="approve" type="submit">Approve invoice</button></form>
+        <button class="approve" type="button" id="approvebtn" onclick="approveWithExcludes()">Approve invoice</button>
         <form method="post" action="/invoices/${esc(invoice.id)}/reject" onsubmit="return lock(this)"><button class="reject" type="submit">Reject / send back</button></form>
       </div>
-      <div class="note">Read-only: confirm the parsed data matches the invoice, then Approve. If it&rsquo;s wrong, Reject &mdash; corrections are made at the source (re-parse), not here.</div>`
+      <div class="note" id="exclnote"></div>
+      <div class="note">Read-only: confirm the parsed data matches the invoice, then Approve. Tick <strong>Exclude</strong> on any product line that shouldn&rsquo;t become a catalog item (e.g. a consignment or misc bundle). If the parse is wrong, Reject &mdash; corrections are made at the source (re-parse), not here.</div>`
           : ''
       }
       ${status === 'done' ? '<p>&#10003; Approved &amp; pushed to Square.</p>' : ''}
@@ -134,6 +137,19 @@ ${status === 'importing' ? '<meta http-equiv="refresh" content="4">' : ''}
     setTimeout(function(){ var bs=document.querySelectorAll('.actions button'); for(var i=0;i<bs.length;i++) bs[i].disabled=true; }, 0);
     return true;
   }
+  function approveWithExcludes(){
+    if(submitted) return; submitted=true;
+    var b=document.getElementById('approvebtn'); if(b){ b.textContent='Approving…'; b.disabled=true; }
+    var ids=Array.prototype.map.call(document.querySelectorAll('.excl:checked'), function(c){ return c.getAttribute('data-line'); });
+    fetch('/invoices/${esc(invoice.id)}/approve',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({excluded:ids})})
+      .then(function(){ location.href='/queue'; }, function(){ location.href='/queue'; });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.excl'), function(c){
+    c.addEventListener('change', function(){
+      var n=document.querySelectorAll('.excl:checked').length;
+      var e=document.getElementById('exclnote'); if(e) e.textContent = n ? (n+' line'+(n>1?'s':'')+' will be excluded from the push.') : '';
+    });
+  });
 </script>
 </body></html>`;
 }
