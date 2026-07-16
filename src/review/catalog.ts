@@ -160,14 +160,17 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
 <style>
   body{font-family:system-ui,-apple-system,sans-serif;margin:0 auto;max-width:1280px;color:#1a1a1a;padding:1.25rem 1rem}
   h2{margin:0 0 .25rem} .sub{color:#555;margin:0 0 .75rem;font-size:14px}
-  #preview{background:#fff;border-bottom:2px solid #eee;padding:.5rem 0 .9rem;
+  /* The preview + control bar stay pinned to the top; only the table scrolls beneath them. */
+  #stickytop{position:sticky;top:0;z-index:10;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.06)}
+  #preview{background:#fff;border-bottom:1px solid #eee;padding:.4rem 0 .5rem;
     display:flex;flex-direction:column;align-items:center}
-  #pv{width:500px;height:500px;max-width:100%;object-fit:contain;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px}
+  /* Cap the pinned image so it can't eat the whole viewport on shorter screens. */
+  #pv{width:min(440px,42vh);height:min(440px,42vh);max-width:100%;object-fit:contain;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px}
   #pvempty{width:500px;max-width:100%;height:180px;display:flex;align-items:center;justify-content:center;
     color:#9ca3af;border:1px dashed #d1d5db;border-radius:8px;font-size:14px}
   .pvmeta{margin-top:.5rem;font-size:13px;color:#374151;text-align:center}
   .pvmeta a{color:#2563eb;margin-left:.5rem}
-  #gallery{display:none;width:100%;max-width:800px}
+  #gallery{display:none;width:100%;max-width:800px;max-height:52vh;overflow:auto}
   .galtitle{font-size:13px;color:#374151;margin:.25rem 0 .6rem;text-align:center}
   .galgrid{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
   .galtile{position:relative;width:140px;height:140px}
@@ -204,7 +207,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   .alts{font:inherit;font-size:12px;padding:.25rem .6rem;border:1px solid #2563eb;color:#2563eb;background:#fff;border-radius:6px;cursor:pointer;white-space:nowrap}
   .alts:disabled{opacity:.6;cursor:default}
   tr.active{background:#f0fdf4} tr.active .thumb{outline:2px solid #166534}
-  #editbar{position:sticky;top:0;z-index:6;background:#fff;border-bottom:1px solid #e5e7eb;padding:.5rem 0;margin-bottom:.25rem;
+  #editbar{background:#fff;border-bottom:1px solid #e5e7eb;padding:.5rem 0;margin-bottom:.25rem;
     display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-size:13px}
   #editbar select{font:inherit;font-size:12px;padding:.25rem;max-width:260px}
   #editbar .sep{flex:1}
@@ -222,7 +225,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   .itemlink{color:#2563eb;text-decoration:none;font-size:11px;font-weight:600;margin-left:4px}
   .itemlink:hover{text-decoration:underline}
   #bulkphotos{border-color:#7c3aed;background:#fff;color:#7c3aed}
-  #phototray{position:sticky;top:52px;z-index:5;background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:.6rem;margin-bottom:.5rem;max-height:38vh;overflow:auto}
+  #phototray{background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:.6rem;margin-bottom:.5rem;max-height:38vh;overflow:auto}
   .trayhead{font-size:13px;color:#374151;margin-bottom:.5rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
   .trayhead button{font:inherit;font-size:12px;padding:.3rem .7rem;border-radius:6px;cursor:pointer;border:1px solid #7c3aed;background:#7c3aed;color:#fff}
   .trayhead .traycancel{border-color:#9ca3af;background:#fff;color:#374151}
@@ -256,6 +259,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
 <body>
   <h2>Catalog review</h2>
   <p class="sub">${rows.length} variations${countLine ? ' — ' + esc(countLine) : ''}${uncatCount ? ` &middot; <strong class="uncatnote">&#9888; ${uncatCount} need a category</strong>` : ''}. Click a <strong>thumbnail</strong> to preview it large up top. <strong>Review alternatives</strong> shows the other candidates — pick a better one or clear the image.</p>
+  <div id="stickytop">
   <div id="preview">
     <img id="pv" alt="" style="display:none">
     <div id="pvempty">Click a thumbnail to preview its image here (500×500).</div>
@@ -275,6 +279,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
     <span id="pushstatus"></span>
   </div>
   <div id="phototray" hidden></div>
+  </div><!-- /stickytop -->
   <table>
     <thead><tr><th><input type="checkbox" id="chkall"></th><th></th><th class="sortable" data-key="item">Item &amp; description</th><th class="sortable" data-key="variation">Variation</th><th class="sortable" data-key="category">Category</th><th class="sortable" data-key="vendor">Vendor</th><th class="sortable" data-key="sku">SKU</th><th class="sortable" data-key="wholesale">Wholesale</th><th class="sortable" data-key="retail">Retail</th><th class="sortable" data-key="status">Status</th><th></th></tr></thead>
     <tbody>${body}</tbody>
