@@ -143,7 +143,7 @@ export function renderVariationPage(v: VariationDetail): string {
     <div class="imgcol">
       ${v.imageUrl ? `<img class="img" src="${esc(v.imageUrl)}" alt="">` : '<div class="imgempty">no image</div>'}
       <div class="imgbtns">
-        <label class="up">Upload<input type="file" id="file" accept="image/*" hidden></label>
+        <label class="up">Upload<input type="file" id="file" accept="image/*,.heic,.heif" hidden></label>
         ${v.imageUrl ? '<button class="mini" id="asitem">★ item</button><button class="clr" id="clear">Remove</button>' : ''}
       </div>
     </div>
@@ -216,7 +216,7 @@ export function renderItemPage(item: ItemDetail): string {
         <td>${v.retail ? '$' + esc(v.retail) : ''}</td>
         <td><span class="badge" style="background:${color}">${esc(v.status)}</span></td>
         <td>
-          <label class="up">Upload<input type="file" accept="image/*" data-seq="${esc(v.seq)}" hidden></label>
+          <label class="up">Upload<input type="file" accept="image/*,.heic,.heif" data-seq="${esc(v.seq)}" hidden></label>
           <button class="asitem" data-seq="${esc(v.seq)}" title="Use as the item's main image">&#9733;</button>
         </td>
       </tr>`;

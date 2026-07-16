@@ -14,6 +14,7 @@ import {
   isAllowedImageType,
   type SquareConfig,
 } from '../lib/square-client.js';
+import { normalizeUploadedImage } from '../lib/image-normalize.js';
 
 export interface CatalogRow {
   seq: string;
@@ -222,7 +223,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
     <button id="bulkapply" disabled>Set on selected (0)</button>
     <button id="synccat" title="Fill the category column from the live Square catalog">Sync categories</button>
     <button id="bulkphotos" title="Upload a batch of photos; auto-match by filename, drag the rest onto rows">Bulk photos…</button>
-    <input type="file" id="photofiles" accept="image/*" multiple hidden>
+    <input type="file" id="photofiles" accept="image/*,.heic,.heif" multiple hidden>
     <span class="sep"></span>
     <span id="dirtycount">No changes</span>
     <button id="pushbtn" disabled>Push changes to Square</button>
@@ -589,10 +590,12 @@ export async function uploadVariationImage(
   file: { bytes: Buffer; contentType: string },
   opts: { ops?: ImageEditOps; setItem?: boolean } = {},
 ): Promise<{ ok: boolean; error?: string }> {
-  if (!isAllowedImageType(file.contentType)) {
+  if (file.bytes.length === 0) return { ok: false, error: 'empty upload' };
+  // Phone photos arrive as HEIC — convert to JPEG so Square accepts them; others pass through.
+  const norm = await normalizeUploadedImage(file.bytes, file.contentType);
+  if (!isAllowedImageType(norm.contentType)) {
     return { ok: false, error: `unsupported image type: ${file.contentType || 'unknown'}` };
   }
-  if (file.bytes.length === 0) return { ok: false, error: 'empty upload' };
   const ops = opts.ops ?? liveImageEditOps(squareConfigFromEnv());
   const { rows } = await db.query(
     `select square_variation_id, square_item_id, item_name, square_image_id
@@ -607,8 +610,8 @@ export async function uploadVariationImage(
   const attached = await ops.attach({
     variationId: row.square_variation_id,
     itemName: row.item_name ?? '',
-    bytes: file.bytes,
-    contentType: file.contentType,
+    bytes: norm.bytes,
+    contentType: norm.contentType,
     sourceUrl: `upload:${seq}:${Date.now()}`,
   });
   await db.query(
