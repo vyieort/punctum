@@ -36,9 +36,11 @@ import { renderSettingsPage } from './review/settings-page.js';
 import { randomUUID } from 'node:crypto';
 import { oauthConfigFromEnv, squareAuthorizeUrl, exchangeCode } from './auth/square-oauth.js';
 import { saveSquareAccount, getSquareConnection, loadSquareConfig } from './lib/square-account.js';
-import { passwordLogin, refreshSession } from './auth/gotrue.js';
+import { passwordLogin, refreshSession, signUp } from './auth/gotrue.js';
+import { provisionTenant } from './auth/provision.js';
 import { getUser, getSession, verifyAccessToken, ACCESS_COOKIE, REFRESH_COOKIE } from './auth/session.js';
 import { resolveClientForUser, parseCookies } from './auth/tenant.js';
+import { renderOnboardingPage } from './review/onboarding.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -514,6 +516,7 @@ const LOGIN_PAGE = `<!doctype html>
     <input id="pw" type="password" autocomplete="current-password" required>
     <button id="go" type="submit">Sign in</button>
     <div id="err"></div>
+    <p style="margin:.9rem 0 0;font-size:13px;color:#6b7280;text-align:center">New studio? <a href="/signup" style="color:#166534;font-weight:600;text-decoration:none">Create an account</a></p>
   </form>
 <script>
 async function signin(e){
@@ -525,6 +528,56 @@ async function signin(e){
       body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('pw').value})});
     var j=await res.json();
     if(res.ok){ location.href='/'; } else { err.textContent=j.error||'Sign in failed'; b.disabled=false; }
+  }catch(ex){ err.textContent=ex.message; b.disabled=false; }
+  return false;
+}
+</script>
+</body></html>`;
+
+const SIGNUP_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Create account &middot; Punctum</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f8fafc;color:#1a1a1a}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:2rem;width:320px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  h1{margin:0 0 .25rem;font-size:22px} p.sub{color:#6b7280;font-size:13px;margin:0 0 1.25rem}
+  label{display:block;font-size:13px;color:#374151;margin:.6rem 0 .2rem}
+  input{width:100%;box-sizing:border-box;font:inherit;padding:.5rem .6rem;border:1px solid #d1d5db;border-radius:6px}
+  button{width:100%;margin-top:1rem;padding:.6rem;border:1px solid #166534;background:#166534;color:#fff;border-radius:6px;cursor:pointer;font:inherit}
+  button:disabled{opacity:.5}
+  #err{color:#b91c1c;font-size:13px;min-height:1.2em;margin-top:.6rem}
+  #ok{display:none;color:#166534;font-size:13px;margin-top:.6rem}
+  .alt{margin:.9rem 0 0;font-size:13px;color:#6b7280;text-align:center}
+  .alt a{color:#166534;font-weight:600;text-decoration:none}
+</style></head>
+<body>
+  <form class="card" onsubmit="return signup(event)">
+    <h1>Create your studio</h1>
+    <p class="sub">Start turning vendor invoices into Square catalog updates.</p>
+    <label for="studio">Studio name</label>
+    <input id="studio" type="text" autocomplete="organization" required>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" required>
+    <label for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="new-password" minlength="6" required>
+    <button id="go" type="submit">Create account</button>
+    <div id="err"></div>
+    <div id="ok"></div>
+    <p class="alt">Already have an account? <a href="/login">Sign in</a></p>
+  </form>
+<script>
+async function signup(e){
+  e.preventDefault();
+  var b=document.getElementById('go'), err=document.getElementById('err'), ok=document.getElementById('ok');
+  b.disabled=true; err.textContent=''; ok.style.display='none';
+  try{
+    var res=await fetch('/signup',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({studioName:document.getElementById('studio').value,email:document.getElementById('email').value,password:document.getElementById('pw').value})});
+    var j=await res.json();
+    if(res.ok){
+      if(j.pending){ ok.textContent='Check your email to confirm your account, then sign in.'; ok.style.display='block'; b.disabled=false; }
+      else { location.href=j.next||'/onboarding'; }
+    } else { err.textContent=j.error||'Sign up failed'; b.disabled=false; }
   }catch(ex){ err.textContent=ex.message; b.disabled=false; }
   return false;
 }
@@ -564,6 +617,48 @@ const server = createServer(async (req, res) => {
       res.end(JSON.stringify({ ok: true }));
     } catch (err) {
       sendJson(res, 401, { error: (err as Error).message });
+    }
+    return;
+  }
+  // Self-serve signup: create the Supabase user, provision a fresh tenant, and (when the project
+  // auto-confirms) start a session and send them into onboarding.
+  if (url.pathname === '/signup' && req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(SIGNUP_PAGE);
+    return;
+  }
+  if (url.pathname === '/signup' && req.method === 'POST') {
+    try {
+      const raw = await readBodyBuffer(req);
+      const { email, password, studioName } = JSON.parse(raw.toString('utf8') || '{}') as {
+        email?: string; password?: string; studioName?: string;
+      };
+      if (!email || !password || !studioName) {
+        sendJson(res, 400, { error: 'studio name, email and password are required' });
+        return;
+      }
+      const result = await signUp(email, password);
+      if (!result.userId) {
+        sendJson(res, 502, { error: 'sign up did not return a user' });
+        return;
+      }
+      await provisionTenant(getPool() as unknown as Queryable, { userId: result.userId, studioName, email });
+      if (result.tokens) {
+        const t = result.tokens;
+        res.writeHead(200, {
+          'content-type': 'application/json',
+          'set-cookie': [
+            `${ACCESS_COOKIE}=${t.accessToken}; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=${t.expiresIn}`,
+            `${REFRESH_COOKIE}=${t.refreshToken}; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=2592000`,
+          ],
+        });
+        res.end(JSON.stringify({ ok: true, next: '/onboarding' }));
+      } else {
+        // Email confirmation is on: the tenant is provisioned, but there's no session until confirm.
+        sendJson(res, 200, { ok: true, pending: true });
+      }
+    } catch (err) {
+      sendJson(res, 400, { error: (err as Error).message });
     }
     return;
   }
@@ -658,6 +753,21 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/' && req.method === 'GET') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(renderHome({ email: session.user.email, clientId: authedClient }));
+    return;
+  }
+
+  // Onboarding wizard: derives its steps from live tenant state, so it's resumable.
+  if (url.pathname === '/onboarding' && req.method === 'GET') {
+    try {
+      const db = getPool() as unknown as Queryable;
+      const conn = await getSquareConnection(db, authedClient);
+      const cnt = await db.query(`select count(*)::int as n from catalog_mapping where client_id = $1`, [authedClient]);
+      const catalogCount = Number((cnt.rows[0] as { n: number } | undefined)?.n ?? 0);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(renderOnboardingPage({ email: session.user.email, clientId: authedClient, squareConnected: conn.connected, catalogCount }));
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
     return;
   }
 
