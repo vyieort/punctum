@@ -10,6 +10,7 @@ export interface OnboardingState {
   clientId: string;
   squareConnected: boolean;
   catalogCount: number;
+  pricingReviewed: boolean;
 }
 
 interface Step {
@@ -37,9 +38,16 @@ export function renderOnboardingPage(s: OnboardingState): string {
       actionLabel: s.catalogCount > 0 ? `Re-import (${s.catalogCount} items)` : 'Import catalog',
     },
     {
+      title: 'Set your pricing',
+      desc: 'Confirm how retail prices are calculated from wholesale cost — the gold and default multipliers and rounding. You can change these anytime.',
+      done: s.pricingReviewed,
+      actionHref: '/settings',
+      actionLabel: s.pricingReviewed ? 'Review pricing' : 'Set pricing',
+    },
+    {
       title: "You're ready",
       desc: 'Upload a vendor invoice and Punctum drafts the catalog changes for your review — then pushes them to Square.',
-      done: s.squareConnected && s.catalogCount > 0,
+      done: s.squareConnected && s.catalogCount > 0 && s.pricingReviewed,
       actionHref: '/invoices/batch',
       actionLabel: 'Upload an invoice',
     },

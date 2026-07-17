@@ -31,7 +31,8 @@ import { getItemDetail, renderItemPage, getVariationDetail, renderVariationPage 
 import { applyEdits, getEditPatterns, getCategoryPaths, clearEdits, type RowEdit } from './review/catalog-edit.js';
 import { renderPatternsPage } from './review/patterns-page.js';
 import { syncCategoryPaths } from './jobs/category-sync.js';
-import { getClientSettings, setAutoEnrichImages } from './lib/client-settings.js';
+import { getClientSettings, setAutoEnrichImages, savePricingRules } from './lib/client-settings.js';
+import { loadPricingRules } from './jobs/import-preview.js';
 import { renderSettingsPage } from './review/settings-page.js';
 import { randomUUID } from 'node:crypto';
 import { oauthConfigFromEnv, squareAuthorizeUrl, exchangeCode } from './auth/square-oauth.js';
@@ -760,11 +761,17 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/onboarding' && req.method === 'GET') {
     try {
       const db = getPool() as unknown as Queryable;
-      const conn = await getSquareConnection(db, authedClient);
-      const cnt = await db.query(`select count(*)::int as n from catalog_mapping where client_id = $1`, [authedClient]);
+      const [conn, settings, cnt] = await Promise.all([
+        getSquareConnection(db, authedClient),
+        getClientSettings(db, authedClient),
+        db.query(`select count(*)::int as n from catalog_mapping where client_id = $1`, [authedClient]),
+      ]);
       const catalogCount = Number((cnt.rows[0] as { n: number } | undefined)?.n ?? 0);
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(renderOnboardingPage({ email: session.user.email, clientId: authedClient, squareConnected: conn.connected, catalogCount }));
+      res.end(renderOnboardingPage({
+        email: session.user.email, clientId: authedClient,
+        squareConnected: conn.connected, catalogCount, pricingReviewed: settings.pricingReviewed,
+      }));
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }
@@ -828,9 +835,13 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/settings' && req.method === 'GET') {
     try {
       const pool = getPool() as unknown as Queryable;
-      const [s, conn] = await Promise.all([getClientSettings(pool, authedClient), getSquareConnection(pool, authedClient)]);
+      const [s, pricing, conn] = await Promise.all([
+        getClientSettings(pool, authedClient),
+        loadPricingRules(pool, authedClient),
+        getSquareConnection(pool, authedClient),
+      ]);
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(renderSettingsPage(s, conn, url.searchParams.get('square')));
+      res.end(renderSettingsPage(s, pricing, conn, url.searchParams.get('square')));
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }
@@ -838,9 +849,30 @@ const server = createServer(async (req, res) => {
   }
   if (url.pathname === '/settings' && req.method === 'POST') {
     try {
+      const pool = getPool() as unknown as Queryable;
       const raw = await readBodyBuffer(req);
-      const body = JSON.parse(raw.toString('utf8') || '{}') as { autoEnrichImages?: boolean };
-      await setAutoEnrichImages(getPool() as unknown as Queryable, authedClient, body.autoEnrichImages !== false);
+      const body = JSON.parse(raw.toString('utf8') || '{}') as {
+        autoEnrichImages?: boolean;
+        pricing?: { gold?: number; default?: number; roundTo?: number };
+      };
+      await setAutoEnrichImages(pool, authedClient, body.autoEnrichImages !== false);
+      if (body.pricing) {
+        // Merge the three editable knobs onto the existing rules so gold_when (what counts as gold)
+        // is preserved. Ignore non-finite/invalid inputs.
+        const cur = await loadPricingRules(pool, authedClient);
+        const gold = Number(body.pricing.gold);
+        const def = Number(body.pricing.default);
+        const roundTo = Number(body.pricing.roundTo);
+        const next = {
+          ...cur,
+          multipliers: {
+            gold: Number.isFinite(gold) && gold > 0 ? gold : cur.multipliers.gold,
+            default: Number.isFinite(def) && def > 0 ? def : cur.multipliers.default,
+          },
+          rounding: { op: 'ceil' as const, to_cents: Number.isFinite(roundTo) && roundTo > 0 ? Math.round(roundTo) : cur.rounding.to_cents },
+        };
+        await savePricingRules(pool, authedClient, next);
+      }
       sendJson(res, 200, { ok: true });
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
