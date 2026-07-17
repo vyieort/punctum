@@ -43,6 +43,10 @@ import { getUser, getSession, verifyAccessToken, ACCESS_COOKIE, REFRESH_COOKIE }
 import { resolveClientForUser, parseCookies } from './auth/tenant.js';
 import { renderOnboardingPage } from './review/onboarding.js';
 import { ingestInboundEmail, parsePostmarkInbound, ensureInboundToken, inboundAddressFor, commonInboundAddress } from './lib/inbound-email.js';
+import { extractAndClassify } from './lib/merged.js';
+import { diffExtractions } from './lib/extraction-diff.js';
+import { loadVendorHints } from './lib/vendor-profile.js';
+import { maybeCompressPdf } from './lib/pdf-compress.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -296,6 +300,58 @@ async function run(){
 </script>
 </body></html>`;
 
+// Vendor-profile eval: extract one PDF twice (baseline vs hinted) and show the diff, in the browser.
+const VENDOR_EVAL_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vendor profile eval · Punctum</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:1.75rem auto;max-width:860px;color:#1a1a1a;padding:0 1rem}
+  a{color:#2563eb;text-decoration:none} h2{margin:.25rem 0 .5rem}
+  p{color:#444} label{display:block;font-weight:600;font-size:13px;margin:1rem 0 .3rem}
+  textarea{width:100%;box-sizing:border-box;font:inherit;font-size:13px;min-height:130px;padding:.55rem;border:1px solid #d1d5db;border-radius:6px}
+  button{margin-top:1rem;padding:.55rem 1.1rem;border:1px solid #166534;background:#166534;color:#fff;border-radius:6px;cursor:pointer;font:inherit}
+  button:disabled{opacity:.5}
+  #status{margin-left:.8rem;color:#333;font-size:14px}
+  table{border-collapse:collapse;width:100%;font-size:13px;margin-top:1rem}
+  th,td{border-bottom:1px solid #eee;padding:.4rem .55rem;text-align:left;vertical-align:top}
+  th{color:#666} .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  .before{color:#b91c1c} .after{color:#166534}
+</style></head>
+<body>
+  <p><a href="/">← Home</a></p>
+  <h2>Vendor profile eval</h2>
+  <p>Extract one invoice PDF <strong>twice</strong> — once with no vendor hints, once with the guidance below — and see exactly what the profile would change. Two AI calls (run in parallel), so give it up to ~60s. Nothing is saved or pushed.</p>
+  <label for="f">Invoice PDF</label>
+  <input type="file" id="f" accept="application/pdf">
+  <label for="hints">Vendor hints (injected into extraction — edit or clear as needed)</label>
+  <textarea id="hints">Anatometal accent-gem pairing: an accent-gem line (e.g. 'faceted-4.0AB-fb' = Aurora Borealis 4mm, or 'cab-3.0HE-ge' = Genuine Hematite 3mm) belongs to the jewelry SKU on the line immediately BEFORE it. Set that parent line's gems field to the gem, and do not treat the accent-gem line as its own product. If the same jewelry SKU appears multiple times with different accent gems, keep each as a SEPARATE line item.</textarea>
+  <div><button id="go" onclick="run()">Run eval</button><span id="status"></span></div>
+  <div id="result"></div>
+<script>
+function abToB64(buf){ var b=new Uint8Array(buf), s='', c=0x8000; for(var i=0;i<b.length;i+=c){ s+=String.fromCharCode.apply(null, b.subarray(i,i+c)); } return btoa(s); }
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function render(d){
+  var r=document.getElementById('result');
+  var head='<p><strong>'+d.baselineItems+'</strong> items baseline &middot; <strong>'+d.hintedItems+'</strong> hinted &middot; <strong>'+d.changedLines+'</strong> lines changed &middot; '+d.changes.length+' field changes'+(d.baselineItems!==d.hintedItems?' &mdash; ⚠ line count changed':'')+'</p>';
+  if(!d.changes.length){ r.innerHTML=head+'<p>No differences — the hints changed nothing on this invoice.</p>'; return; }
+  var rows=d.changes.map(function(c){ return '<tr><td>'+c.line+'</td><td class="mono">'+esc(c.field)+'</td><td class="before mono">'+esc(c.before||'∅')+'</td><td class="after mono">'+esc(c.after||'∅')+'</td></tr>'; }).join('');
+  r.innerHTML=head+'<table><thead><tr><th>Line</th><th>Field</th><th>Baseline</th><th>With hints</th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
+async function run(){
+  var el=document.getElementById('f'), st=document.getElementById('status'), b=document.getElementById('go'), r=document.getElementById('result');
+  if(!el.files||!el.files[0]){ st.textContent='Pick a PDF first.'; return; }
+  b.disabled=true; r.innerHTML=''; st.textContent='Extracting baseline + hinted — up to ~60s…';
+  try{
+    var b64=abToB64(await el.files[0].arrayBuffer());
+    var res=await fetch('/jobs/vendor-eval',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pdfBase64:b64,hints:document.getElementById('hints').value})});
+    var j=await res.json();
+    if(res.ok){ render(j.diff); st.textContent='Done.'; } else { st.textContent='Error: '+(j.error||res.status); }
+  }catch(e){ st.textContent='Error: '+e.message; }
+  b.disabled=false;
+}
+</script>
+</body></html>`;
+
 // Deliberate trigger to push an approved invoice into Square (reads ?invoice=<id>).
 const IMPORT_PAGE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -460,6 +516,7 @@ const renderHome = (sess: { email: string | null; clientId: string }): string =>
     <li><a href="/invoices/batch">Batch upload</a><div class="d">Drop a stack of PDFs &mdash; they queue and extract in the background.</div></li>
     <li><a href="/invoices/new">Single upload</a><div class="d">Upload one invoice and go straight to its review page.</div></li>
     <li><a href="/queue">Review queue</a><div class="d">Every invoice by status; review &amp; approve as each becomes ready.</div></li>
+    <li><a href="/settings">Email invoices in</a><div class="d">Forward a vendor PDF from your account email and it auto-queues for review &mdash; your address is in Settings.</div></li>
   </ul>
 
   <h2>Catalog &amp; images</h2>
@@ -473,9 +530,10 @@ const renderHome = (sess: { email: string | null; clientId: string }): string =>
   <ul>
     <li><a href="/onboarding">Get started</a><div class="d">Setup checklist: connect Square, import your catalog, set pricing &mdash; shows what's left to do.</div></li>
     <li><a href="/library/import">Import existing library</a><div class="d">Seed Punctum from a Square library export so reorders restock instead of duplicating (run once per client).</div></li>
-    <li><a href="/jobs/categories/provision">Provision categories</a><div class="d">Create the category tree in the Square sandbox (run once on an empty sandbox).</div></li>
-    <li><a href="/square/verify">Square connection check</a><div class="d">Confirm the Square token + location reach the sandbox.</div></li>
+    <li><a href="/jobs/categories/provision">Provision categories</a><div class="d">Create the category tree in the connected Square account (run once on a fresh account).</div></li>
+    <li><a href="/square/verify">Square connection check</a><div class="d">Confirm the connected Square token + location are reachable.</div></li>
     <li><a href="/compare">Compare pipelines (A/B)</a><div class="d">Diff two-pass vs one-pass extraction on a PDF &mdash; no writes.</div></li>
+    <li><a href="/jobs/vendor-eval">Vendor profile eval</a><div class="d">Extract a PDF with vs without vendor hints and see the diff &mdash; test a vendor profile before trusting it.</div></li>
   </ul>
 
   <h2>Advanced</h2>
@@ -485,7 +543,7 @@ const renderHome = (sess: { email: string | null; clientId: string }): string =>
 
   <h2>Account</h2>
   <ul>
-    <li><a href="/settings">Settings</a><div class="d">Studio preferences &mdash; e.g. turn off image auto-enrichment if you supply your own photos.</div></li>
+    <li><a href="/settings">Settings</a><div class="d">Connect Square, your email-in address for invoices, pricing rules, and the product-photo auto-enrich toggle.</div></li>
     <li><a href="/logout">Log out</a><div class="d">End your session and return to the sign-in page.</div></li>
     <li><a href="/whoami">Session info</a><div class="d">Your user id and current tenant (JSON).</div></li>
   </ul>
@@ -1234,6 +1292,34 @@ const server = createServer(async (req, res) => {
         const filename = url.searchParams.get('filename') ?? undefined;
         const result = await runComparison(pdf.toString('base64'));
         sendJson(res, 200, { file: filename, ...result });
+      } catch (err) {
+        sendJson(res, 500, { error: (err as Error).message });
+      }
+      return;
+    }
+  }
+
+  // Vendor-profile eval: GET serves the page; POST extracts one uploaded PDF twice (baseline vs
+  // vendor-hinted) in parallel and returns the diff. No writes. (#42 engine testing.)
+  if (url.pathname === '/jobs/vendor-eval') {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(VENDOR_EVAL_PAGE);
+      return;
+    }
+    if (req.method === 'POST') {
+      try {
+        const raw = await readBodyBuffer(req);
+        const body = JSON.parse(raw.toString('utf8') || '{}') as { pdfBase64?: string; hints?: string; vendor?: string };
+        if (!body.pdfBase64) {
+          sendJson(res, 400, { error: 'pdfBase64 required' });
+          return;
+        }
+        let hints = body.hints ?? '';
+        if (!hints && body.vendor) hints = await loadVendorHints(getPool() as unknown as Queryable, body.vendor);
+        const { base64: pdf } = await maybeCompressPdf(body.pdfBase64);
+        const [baseline, hinted] = await Promise.all([extractAndClassify(pdf), extractAndClassify(pdf, {}, hints)]);
+        sendJson(res, 200, { diff: diffExtractions(baseline, hinted) });
       } catch (err) {
         sendJson(res, 500, { error: (err as Error).message });
       }
