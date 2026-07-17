@@ -1,0 +1,4 @@
+Anatometal accent-gem pairing: an accent-gem line (e.g. 'faceted-4.0AB-fb' = Aurora Borealis 4mm, or 'cab-3.0HE-ge' = Genuine Hematite 3mm) belongs to the jewelry SKU on the line immediately BEFORE it. Set that parent line's `gems` field to the gem, and do not treat the accent-gem line as its own product. Examples:
+- 'ED-FBGE-TI-14g-4' (Flat Bezel Gem End) followed by 'faceted-4.0AB-fb' -> parent gems = '4mm Aurora Borealis CZ'
+- 'ED-BEZCAB-TI-14g-3' followed by 'cab-3.0HE-ge' -> parent gems = '3mm Genuine Hematite Cabochon'
+If the same jewelry SKU appears multiple times with different accent gems, keep each as a SEPARATE line item — they are different gem variations of the same setting.

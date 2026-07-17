@@ -12,6 +12,7 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "tags:parity": "node --import tsx src/cli/parity-report.ts",
+    "vendor:eval": "node --import tsx src/cli/vendor-eval.ts",
     "migrate": "node --import tsx scripts/migrate.ts"
   },
   "dependencies": {
