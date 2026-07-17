@@ -45,9 +45,10 @@ export function toImportLine(item: ClassifiedItem, cfg: BridgeConfig): BridgeRes
   if (pt === 'FILTER') return { line: null, skipped: 'FILTER' };
   if (pt === 'FINISH') return { line: null, skipped: 'FINISH' };
 
-  const { retail_cents } = computePricing(item, cfg.pricingRules);
-
+  // Resolve the category first so pricing can exempt fee/service/tool categories from markup.
   const leafPath = resolveCategoryPath(item);
+  const { retail_cents } = computePricing({ ...item, category: leafPath }, cfg.pricingRules);
+
   let categoryId = leafPath ? (cfg.categoryMap.get(leafPath) ?? null) : null;
   let flagged = false;
   let flagReason: string | undefined;

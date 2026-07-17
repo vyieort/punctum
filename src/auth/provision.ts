@@ -8,12 +8,19 @@
 import { randomUUID } from 'node:crypto';
 import type { Queryable } from '../jobs/pg-rows.js';
 
-// Sensible starting pricing so a brand-new tenant's imports aren't priced at cost. Mirrors the
-// original studio config; the owner tunes it later in Settings.
+// Sensible starting pricing so a brand-new tenant's imports aren't priced at cost. Two OR'd gold
+// rules (metal OR vendor) + a 3× default + fee/service categories exempt from markup. Legacy
+// multipliers/gold_when are kept for back-compat. The owner tunes all of this in Settings.
 const DEFAULT_PRICING = {
   multipliers: { gold: 2.5, default: 3.0 },
   gold_when: { metal_contains: ['14k', '18k', 'gold'], vendor_in: ['bvla'] },
   rounding: { op: 'ceil', to_cents: 50 },
+  rules: [
+    { name: 'Gold metal', metals: ['14k', '18k', 'gold'], multiplier: 2.5 },
+    { name: 'BVLA', vendors: ['bvla'], multiplier: 2.5 },
+  ],
+  default_multiplier: 3.0,
+  exempt_categories: ['Piercing Fee', 'Service & Tool Fees', 'Diagnostic'],
 };
 
 /** A readable, collision-resistant tenant id from the studio name: slug + short random suffix. */

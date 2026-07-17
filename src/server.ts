@@ -853,23 +853,33 @@ const server = createServer(async (req, res) => {
       const raw = await readBodyBuffer(req);
       const body = JSON.parse(raw.toString('utf8') || '{}') as {
         autoEnrichImages?: boolean;
-        pricing?: { gold?: number; default?: number; roundTo?: number };
+        pricing?: {
+          rules?: Array<{ metals?: unknown; vendors?: unknown; multiplier?: unknown }>;
+          default?: number;
+          roundTo?: number;
+          exempt?: unknown;
+        };
       };
       await setAutoEnrichImages(pool, authedClient, body.autoEnrichImages !== false);
       if (body.pricing) {
-        // Merge the three editable knobs onto the existing rules so gold_when (what counts as gold)
-        // is preserved. Ignore non-finite/invalid inputs.
         const cur = await loadPricingRules(pool, authedClient);
-        const gold = Number(body.pricing.gold);
-        const def = Number(body.pricing.default);
-        const roundTo = Number(body.pricing.roundTo);
+        const p = body.pricing;
+        const cleanList = (v: unknown): string[] =>
+          Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map((x) => x.trim()) : [];
+        // Keep only well-formed rules (at least one condition + a positive multiplier).
+        const rules = (Array.isArray(p.rules) ? p.rules : [])
+          .map((r) => ({ metals: cleanList(r.metals), vendors: cleanList(r.vendors), multiplier: Number(r.multiplier) }))
+          .filter((r) => (r.metals.length > 0 || r.vendors.length > 0) && Number.isFinite(r.multiplier) && r.multiplier > 0);
+        const def = Number(p.default);
+        const defaultMult = Number.isFinite(def) && def > 0 ? def : cur.default_multiplier ?? cur.multipliers.default;
+        const roundTo = Number(p.roundTo);
         const next = {
           ...cur,
-          multipliers: {
-            gold: Number.isFinite(gold) && gold > 0 ? gold : cur.multipliers.gold,
-            default: Number.isFinite(def) && def > 0 ? def : cur.multipliers.default,
-          },
+          multipliers: { gold: cur.multipliers?.gold ?? defaultMult, default: defaultMult },
           rounding: { op: 'ceil' as const, to_cents: Number.isFinite(roundTo) && roundTo > 0 ? Math.round(roundTo) : cur.rounding.to_cents },
+          rules,
+          default_multiplier: defaultMult,
+          exempt_categories: cleanList(p.exempt),
         };
         await savePricingRules(pool, authedClient, next);
       }
