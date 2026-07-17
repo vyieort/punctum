@@ -42,6 +42,7 @@ import { provisionTenant } from './auth/provision.js';
 import { getUser, getSession, verifyAccessToken, ACCESS_COOKIE, REFRESH_COOKIE } from './auth/session.js';
 import { resolveClientForUser, parseCookies } from './auth/tenant.js';
 import { renderOnboardingPage } from './review/onboarding.js';
+import { ingestInboundEmail, parsePostmarkInbound, ensureInboundToken, inboundAddressFor, commonInboundAddress } from './lib/inbound-email.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -470,6 +471,7 @@ const renderHome = (sess: { email: string | null; clientId: string }): string =>
 
   <h2>Setup &amp; checks</h2>
   <ul>
+    <li><a href="/onboarding">Get started</a><div class="d">Setup checklist: connect Square, import your catalog, set pricing &mdash; shows what's left to do.</div></li>
     <li><a href="/library/import">Import existing library</a><div class="d">Seed Punctum from a Square library export so reorders restock instead of duplicating (run once per client).</div></li>
     <li><a href="/jobs/categories/provision">Provision categories</a><div class="d">Create the category tree in the Square sandbox (run once on an empty sandbox).</div></li>
     <li><a href="/square/verify">Square connection check</a><div class="d">Confirm the Square token + location reach the sandbox.</div></li>
@@ -590,6 +592,28 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/health') {
     sendJson(res, 200, { status: 'ok', service: 'punctum' });
+    return;
+  }
+
+  // Inbound email → auto-queue invoices. Public (the email provider isn't a logged-in user), so it's
+  // authenticated by a shared secret (?key= or x-inbound-secret). Body is the provider webhook JSON.
+  if (url.pathname === '/inbound/email' && req.method === 'POST') {
+    const secret = process.env.INBOUND_WEBHOOK_SECRET;
+    const provided = url.searchParams.get('key') ?? (typeof req.headers['x-inbound-secret'] === 'string' ? req.headers['x-inbound-secret'] : undefined);
+    if (!secret || provided !== secret) {
+      sendJson(res, 401, { error: 'unauthorized' });
+      return;
+    }
+    try {
+      const raw = await readBodyBuffer(req);
+      const msg = parsePostmarkInbound(JSON.parse(raw.toString('utf8') || '{}'));
+      const result = await ingestInboundEmail(getPool() as unknown as Queryable, msg);
+      // Always 200 for a well-understood outcome (even "no match") so the provider doesn't retry a
+      // mis-addressed message; a thrown error -> 500 so genuine failures do get retried.
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
     return;
   }
 
@@ -835,13 +859,15 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/settings' && req.method === 'GET') {
     try {
       const pool = getPool() as unknown as Queryable;
-      const [s, pricing, conn] = await Promise.all([
+      const [s, pricing, conn, inboundToken] = await Promise.all([
         getClientSettings(pool, authedClient),
         loadPricingRules(pool, authedClient),
         getSquareConnection(pool, authedClient),
+        ensureInboundToken(pool, authedClient),
       ]);
+      const inbound = { common: commonInboundAddress(), direct: inboundAddressFor(inboundToken), account: session.user.email };
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(renderSettingsPage(s, pricing, conn, url.searchParams.get('square')));
+      res.end(renderSettingsPage(s, pricing, inbound, conn, url.searchParams.get('square')));
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }

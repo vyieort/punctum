@@ -42,6 +42,7 @@ function ruleRowHtml(r: EditableRule): string {
 export function renderSettingsPage(
   settings: ClientSettings,
   pricing: PricingRules,
+  inbound: { common: string; direct: string; account: string | null },
   connection?: SquareConnection,
   squareStatus?: string | null,
 ): string {
@@ -89,6 +90,8 @@ export function renderSettingsPage(
   .prow label{width:132px;font-size:13px;color:#374151}
   .prow input{width:90px;padding:.35rem .5rem;border:1px solid #d1d5db;border-radius:6px;font:inherit}
   .ex{color:#9ca3af;font-size:12px}
+  .addr{margin-top:.4rem}
+  .addr code{font-size:14px;background:#f3f4f6;padding:.3rem .55rem;border-radius:6px;user-select:all}
   .subh{font-weight:600;font-size:13px;margin:1rem 0 .4rem;color:#374151}
   .rulehdr{display:grid;grid-template-columns:1fr 1fr 64px 28px;gap:.5rem;font-size:11px;color:#9ca3af;margin-bottom:.25rem;padding:0 .1rem}
   .rulerow{display:grid;grid-template-columns:1fr 1fr 64px 28px;gap:.5rem;margin:.35rem 0}
@@ -102,6 +105,13 @@ export function renderSettingsPage(
   <h2>Settings</h2>
   ${banner}
   ${squareCard}
+  <div class="card">
+    <div class="t">Email invoices in</div>
+    <div class="d">Forward a vendor invoice PDF from your account email${inbound.account ? ` (<strong>${esc(inbound.account)}</strong>)` : ''} to the address below and it lands in your review queue automatically — no manual upload.</div>
+    <div class="addr"><code>${esc(inbound.common)}</code></div>
+    <div class="d" style="margin-top:.7rem">Or point a vendor straight at your studio's private address (no forwarding needed):</div>
+    <div class="addr"><code>${esc(inbound.direct)}</code></div>
+  </div>
   <div class="card">
     <label class="toggle">
       <input type="checkbox" id="autoenrich" ${settings.autoEnrichImages ? 'checked' : ''}>

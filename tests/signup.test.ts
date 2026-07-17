@@ -52,6 +52,7 @@ async function seeded(): Promise<PGlite> {
   const db = new PGlite();
   await db.exec(mig('0001_init.sql'));
   await db.exec(mig('0011_client_members.sql'));
+  await db.exec(mig('0017_inbound_email_token.sql'));
   return db;
 }
 

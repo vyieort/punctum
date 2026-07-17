@@ -7,6 +7,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Queryable } from '../jobs/pg-rows.js';
+import { genInboundToken } from '../lib/inbound-email.js';
 
 // Sensible starting pricing so a brand-new tenant's imports aren't priced at cost. Two OR'd gold
 // rules (metal OR vendor) + a 3× default + fee/service categories exempt from markup. Legacy
@@ -62,9 +63,9 @@ export async function provisionTenant(
     [clientId, name, opts.email ?? null],
   );
   await db.query(
-    `insert into client_config (client_id, pricing_rules, notification_emails)
-       values ($1, $2::jsonb, $3) on conflict (client_id) do nothing`,
-    [clientId, JSON.stringify(DEFAULT_PRICING), opts.email ? [opts.email] : []],
+    `insert into client_config (client_id, pricing_rules, notification_emails, inbound_token)
+       values ($1, $2::jsonb, $3, $4) on conflict (client_id) do nothing`,
+    [clientId, JSON.stringify(DEFAULT_PRICING), opts.email ? [opts.email] : [], genInboundToken()],
   );
   await db.query(
     `insert into client_members (user_id, client_id, email, role) values ($1, $2, $3, 'owner')
