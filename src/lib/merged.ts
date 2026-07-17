@@ -43,7 +43,17 @@ export function parseMergedInvoice(text: string): MergedInvoice {
   };
 }
 
-export async function extractAndClassify(pdfBase64: string, opts: AnthropicOptions = {}): Promise<MergedInvoice> {
+/** The user-turn instruction, optionally augmented with a vendor's learned guidance (#42 engine). */
+export function buildExtractionInstruction(vendorHints = ''): string {
+  const base = 'Extract and classify all line items from this invoice.';
+  return vendorHints.trim() ? `${base}\n\n${vendorHints.trim()}` : base;
+}
+
+export async function extractAndClassify(
+  pdfBase64: string,
+  opts: AnthropicOptions = {},
+  vendorHints = '',
+): Promise<MergedInvoice> {
   const text = await anthropicText(
     {
       system: MERGED_PROMPT,
@@ -58,7 +68,7 @@ export async function extractAndClassify(pdfBase64: string, opts: AnthropicOptio
               source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 },
               cache_control: { type: 'ephemeral' },
             },
-            { type: 'text', text: 'Extract and classify all line items from this invoice.' },
+            { type: 'text', text: buildExtractionInstruction(vendorHints) },
           ],
         },
       ],
