@@ -897,7 +897,12 @@ const server = createServer(async (req, res) => {
   // clean. Only full HTML documents are rewritten; JSON and binary responses pass straight through.
   const endRaw = res.end.bind(res);
   (res as unknown as { end: (...args: unknown[]) => unknown }).end = (chunk?: unknown, ...rest: unknown[]) => {
-    if (typeof chunk === 'string' && chunk.trimStart().toLowerCase().startsWith('<!doctype html') && chunk.includes('</body>')) {
+    if (
+      url.pathname !== '/' && // home doesn't need a link to itself
+      typeof chunk === 'string' &&
+      chunk.trimStart().toLowerCase().startsWith('<!doctype html') &&
+      chunk.includes('</body>')
+    ) {
       chunk = chunk.replace('</body>', `${HOME_FAB}</body>`);
     }
     return (endRaw as unknown as (...args: unknown[]) => unknown)(chunk, ...rest);
