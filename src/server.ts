@@ -629,15 +629,17 @@ const SIGNUP_PAGE = `<!doctype html>
 <script>
 async function signup(e){
   e.preventDefault();
-  var b=document.getElementById('go'), err=document.getElementById('err'), ok=document.getElementById('ok');
-  b.disabled=true; err.textContent=''; ok.style.display='none';
+  var b=document.getElementById('go'), err=document.getElementById('err');
+  var email=document.getElementById('email').value;
+  b.disabled=true; err.textContent='';
   try{
     var res=await fetch('/signup',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({studioName:document.getElementById('studio').value,email:document.getElementById('email').value,password:document.getElementById('pw').value})});
+      body:JSON.stringify({studioName:document.getElementById('studio').value,email:email,password:document.getElementById('pw').value})});
     var j=await res.json();
     if(res.ok){
-      if(j.pending){ ok.textContent='Check your email to confirm your account, then sign in.'; ok.style.display='block'; b.disabled=false; }
-      else { location.href=j.next||'/onboarding'; }
+      if(j.pending){
+        document.querySelector('.card').innerHTML='<h1>Check your email</h1><p class="sub">We sent a confirmation link to <strong>'+email+'</strong>. Click it to activate your studio, then come back and sign in.</p><p class="alt"><a href="/login">Go to sign in</a></p>';
+      } else { location.href=j.next||'/onboarding'; }
     } else { err.textContent=j.error||'Sign up failed'; b.disabled=false; }
   }catch(ex){ err.textContent=ex.message; b.disabled=false; }
   return false;

@@ -59,7 +59,10 @@ export interface SignUpResult {
  *  otherwise tokens=null and the user must confirm via email before logging in. */
 export async function signUp(email: string, password: string, o: GoTrueConfig = {}): Promise<SignUpResult> {
   const { url, anon, doFetch } = resolve(o);
-  const res = await doFetch(`${url}/auth/v1/signup`, {
+  // Where the confirmation email link sends the user. Defaults to the deployed app so links don't
+  // point at localhost. NOTE: this URL must also be allow-listed in Supabase Auth's Redirect URLs.
+  const redirectTo = process.env.APP_BASE_URL ?? 'https://punctum-production.up.railway.app';
+  const res = await doFetch(`${url}/auth/v1/signup?redirect_to=${encodeURIComponent(redirectTo)}`, {
     method: 'POST',
     headers: { apikey: anon, authorization: `Bearer ${anon}`, 'content-type': 'application/json' },
     body: JSON.stringify({ email, password }),
