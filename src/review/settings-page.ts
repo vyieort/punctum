@@ -135,12 +135,24 @@ export function renderSettingsPage(
   .rulefoot input{width:82px;padding:.3rem .45rem;border:1px solid #d1d5db;border-radius:6px;font:inherit}
   .rmv{margin-left:auto;padding:.28rem .6rem;border:1px solid #e5e7eb;background:#fff;color:#b91c1c;border-radius:6px;cursor:pointer;font:inherit;font-size:12px}
   .addbtn{margin-top:.5rem;padding:.35rem .7rem;border:1px dashed #9ca3af;background:#fff;color:#374151;border-radius:6px;cursor:pointer;font:inherit;font-size:13px}
+  .tokdet{margin:-.4rem 0 1rem;font-size:13px}
+  .tokdet summary{cursor:pointer;color:#2563eb;margin-bottom:.3rem}
+  .tokdet input{width:100%;box-sizing:border-box;margin:.4rem 0;padding:.4rem .5rem;border:1px solid #d1d5db;border-radius:6px;font:inherit;font-size:13px}
+  .tokrow{display:flex;align-items:center;gap:.6rem}
+  .tokdet button{padding:.35rem .8rem;border:1px solid #166534;background:#166534;color:#fff;border-radius:6px;cursor:pointer;font:inherit;font-size:13px}
+  .tokdet button:disabled{opacity:.5}
 </style></head>
 <body>
   <p><a href="/">← Home</a></p>
   <h2>Settings</h2>
   ${banner}
   ${squareCard}
+  <details class="tokdet">
+    <summary>Connect with an access token instead</summary>
+    <div class="d">For sandbox testing. Square's sandbox consent page currently renders blank, so the browser flow can't finish there. In the Square Developer Console, authorize a test account, copy its access token, and paste it here — it's stored encrypted exactly like an OAuth token.</div>
+    <input id="sqtok" type="password" placeholder="Square access token" autocomplete="off" spellcheck="false">
+    <div class="tokrow"><button type="button" id="sqtokgo" onclick="saveToken()">Save token</button><span id="sqtokstatus"></span></div>
+  </details>
   <div class="card">
     <div class="t">Email invoices in</div>
     <div class="d">Forward a vendor invoice PDF from your account email${inbound.account ? ` (<strong>${esc(inbound.account)}</strong>)` : ''} to the address below and it lands in your review queue automatically — no manual upload.</div>
@@ -176,6 +188,18 @@ export function renderSettingsPage(
   </div>
   <button id="save" onclick="save()">Save</button><span id="status"></span>
 <script>
+async function saveToken(){
+  var el=document.getElementById('sqtok'), s=document.getElementById('sqtokstatus'), b=document.getElementById('sqtokgo');
+  var t=(el.value||'').trim();
+  if(!t){ s.textContent='Paste a token first.'; return; }
+  b.disabled=true; s.textContent='Checking the token…';
+  try{
+    var res=await fetch('/settings/square-token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:t})});
+    var j=await res.json();
+    if(res.ok){ el.value=''; s.textContent='Connected ✓ '+(j.locationName||j.locationId)+' — reloading…'; setTimeout(function(){ location.reload(); }, 900); }
+    else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }
+  }catch(e){ s.textContent='Error: '+e.message; b.disabled=false; }
+}
 function checkedIn(root, sel){ return [].slice.call(root.querySelectorAll(sel)).map(function(i){ return i.value; }); }
 function collectRules(){
   var out=[];

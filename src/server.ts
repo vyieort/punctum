@@ -1052,6 +1052,40 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // Manual Square connect: paste an access token instead of running the browser OAuth flow. Needed
+  // because Square's SANDBOX consent page currently renders blank, so the round trip can't complete
+  // there. The token is validated by listing locations, then stored encrypted exactly like OAuth's.
+  if (url.pathname === '/settings/square-token' && req.method === 'POST') {
+    try {
+      const raw = await readBodyBuffer(req);
+      const body = JSON.parse(raw.toString('utf8') || '{}') as { token?: string; environment?: string };
+      const token = (body.token ?? '').trim();
+      if (!token) {
+        sendJson(res, 400, { error: 'token required' });
+        return;
+      }
+      const env = body.environment === 'production' ? ('production' as const) : ('sandbox' as const);
+      // Validating by listing locations proves the token works AND gives us the location to store.
+      const locations = await listLocations({ token, env, locationId: '' });
+      if (locations.length === 0) {
+        sendJson(res, 400, { error: 'token is valid but that account has no locations' });
+        return;
+      }
+      const loc = locations[0]!;
+      await saveSquareAccount(
+        getPool() as unknown as Queryable,
+        authedClient,
+        env,
+        { accessToken: token, refreshToken: '', expiresAt: null, merchantId: null },
+        loc.id,
+      );
+      sendJson(res, 200, { ok: true, environment: env, locationId: loc.id, locationName: loc.name, locations: locations.length });
+    } catch (err) {
+      sendJson(res, 400, { error: (err as Error).message });
+    }
+    return;
+  }
+
   // Square OAuth: start -> set a CSRF state cookie and redirect the studio to Square to authorize.
   if (url.pathname === '/oauth/square/start' && req.method === 'GET') {
     try {
