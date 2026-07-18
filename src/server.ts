@@ -647,6 +647,42 @@ async function signup(e){
 </script>
 </body></html>`;
 
+// Where Supabase sends users after they click the email confirmation link. Supabase returns the
+// session in the URL fragment (#access_token=…), which only the browser can read — so this page
+// reads it and hands the tokens to /auth/session to set the httpOnly cookies, then goes to onboarding.
+const AUTH_CALLBACK_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Confirming… &middot; Punctum</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f8fafc;color:#1a1a1a}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:2rem;width:340px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  h1{margin:0 0 .5rem;font-size:20px} p{color:#6b7280;font-size:14px;margin:.25rem 0}
+  a{color:#166534;font-weight:600;text-decoration:none}
+</style></head>
+<body>
+  <div class="card">
+    <h1>Confirming your account…</h1>
+    <p id="msg">One moment.</p>
+    <p id="alt" style="display:none"><a href="/login">Go to sign in</a></p>
+  </div>
+<script>
+(async function(){
+  var msg=document.getElementById('msg'), alt=document.getElementById('alt');
+  var p=new URLSearchParams((location.hash||'').replace(/^#/,''));
+  var errd=p.get('error_description')||p.get('error');
+  if(errd){ msg.textContent=decodeURIComponent(errd).replace(/\\+/g,' '); alt.style.display='block'; return; }
+  var at=p.get('access_token'), rt=p.get('refresh_token'), ei=p.get('expires_in');
+  if(!at){ msg.textContent='No session found in this link — try signing in.'; alt.style.display='block'; return; }
+  try{
+    var res=await fetch('/auth/session',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({access_token:at,refresh_token:rt,expires_in:ei})});
+    var j=await res.json();
+    if(res.ok){ msg.textContent='Confirmed — taking you in…'; location.href=j.next||'/onboarding'; }
+    else { msg.textContent='Error: '+(j.error||res.status); alt.style.display='block'; }
+  }catch(e){ msg.textContent='Error: '+e.message; alt.style.display='block'; }
+})();
+</script>
+</body></html>`;
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
@@ -744,6 +780,42 @@ const server = createServer(async (req, res) => {
       }
     } catch (err) {
       sendJson(res, 400, { error: (err as Error).message });
+    }
+    return;
+  }
+  // GET: the page Supabase redirects to after email confirmation (reads the session from the URL).
+  if (url.pathname === '/auth/callback' && req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(AUTH_CALLBACK_PAGE);
+    return;
+  }
+  // POST: exchange a verified Supabase session (handed over by the callback page) for our httpOnly
+  // session cookies. Only genuine Supabase-signed tokens pass verifyAccessToken, so this is safe.
+  if (url.pathname === '/auth/session' && req.method === 'POST') {
+    try {
+      const raw = await readBodyBuffer(req);
+      const body = JSON.parse(raw.toString('utf8') || '{}') as { access_token?: string; refresh_token?: string; expires_in?: number | string };
+      if (!body.access_token) {
+        sendJson(res, 400, { error: 'access_token required' });
+        return;
+      }
+      const user = await verifyAccessToken(body.access_token);
+      if (!user.userId) {
+        sendJson(res, 401, { error: 'invalid token' });
+        return;
+      }
+      const clientId = await resolveClientForUser(getPool() as unknown as Queryable, user.userId);
+      if (!clientId) {
+        sendJson(res, 403, { error: 'no studio is linked to this account' });
+        return;
+      }
+      const maxAge = Number(body.expires_in) > 0 ? Number(body.expires_in) : 3600;
+      const cookies = [`${ACCESS_COOKIE}=${body.access_token}; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=${maxAge}`];
+      if (body.refresh_token) cookies.push(`${REFRESH_COOKIE}=${body.refresh_token}; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=2592000`);
+      res.writeHead(200, { 'content-type': 'application/json', 'set-cookie': cookies });
+      res.end(JSON.stringify({ ok: true, next: '/onboarding' }));
+    } catch (err) {
+      sendJson(res, 401, { error: (err as Error).message });
     }
     return;
   }
