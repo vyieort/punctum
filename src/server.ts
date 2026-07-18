@@ -683,6 +683,15 @@ const AUTH_CALLBACK_PAGE = `<!doctype html>
 </script>
 </body></html>`;
 
+// Floating "Home" control injected into every authenticated HTML page (see the res.end patch after
+// the auth gate). Fixed to the bottom-left so it never collides with a page's own sticky header.
+const HOME_FAB = `<a href="/" id="homefab" title="Back to Punctum home">&larr; Home</a>
+<style>#homefab{position:fixed;left:14px;bottom:14px;z-index:9999;background:#166534;color:#fff;
+  text-decoration:none;font:600 13px system-ui,-apple-system,sans-serif;padding:.45rem .85rem;
+  border-radius:999px;box-shadow:0 2px 8px rgba(0,0,0,.18);opacity:.92}
+#homefab:hover{opacity:1}
+@media print{#homefab{display:none}}</style>`;
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
@@ -881,6 +890,18 @@ const server = createServer(async (req, res) => {
     return;
   }
   const authedClient = session.clientId; // replaces the old ?client=RE param (can't be spoofed)
+
+  // Give every authenticated HTML page a persistent way home, so no page is a dead end. Injected
+  // here — once, after the gate — rather than into ~20 page templates, which also means any page we
+  // add later gets it for free. Login/signup/callback are served above this point, so they stay
+  // clean. Only full HTML documents are rewritten; JSON and binary responses pass straight through.
+  const endRaw = res.end.bind(res);
+  (res as unknown as { end: (...args: unknown[]) => unknown }).end = (chunk?: unknown, ...rest: unknown[]) => {
+    if (typeof chunk === 'string' && chunk.trimStart().toLowerCase().startsWith('<!doctype html') && chunk.includes('</body>')) {
+      chunk = chunk.replace('</body>', `${HOME_FAB}</body>`);
+    }
+    return (endRaw as unknown as (...args: unknown[]) => unknown)(chunk, ...rest);
+  };
 
   if (url.pathname === '/tags') {
     const item = url.searchParams.get('item');
