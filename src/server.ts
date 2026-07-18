@@ -991,15 +991,19 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/settings' && req.method === 'GET') {
     try {
       const pool = getPool() as unknown as Queryable;
-      const [s, pricing, conn, inboundToken] = await Promise.all([
+      const [s, pricing, conn, inboundToken, categories, vend] = await Promise.all([
         getClientSettings(pool, authedClient),
         loadPricingRules(pool, authedClient),
         getSquareConnection(pool, authedClient),
         ensureInboundToken(pool, authedClient),
+        getCategoryPaths(pool, authedClient),
+        // Vendor pick-list comes from the tenant's own catalog, so it's always accurate.
+        pool.query(`select distinct vendor from catalog_mapping where client_id = $1 and coalesce(vendor,'') <> '' order by vendor`, [authedClient]),
       ]);
+      const vendors = vend.rows.map((r) => String((r as { vendor: string }).vendor));
       const inbound = { common: commonInboundAddress(), direct: inboundAddressFor(inboundToken), account: session.user.email };
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(renderSettingsPage(s, pricing, inbound, conn, url.searchParams.get('square')));
+      res.end(renderSettingsPage(s, pricing, inbound, { vendors, categories }, conn, url.searchParams.get('square')));
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }

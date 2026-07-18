@@ -7,7 +7,17 @@ import type { PricingRules } from '../lib/pricing.js';
 
 const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-interface EditableRule { metals: string; vendors: string; multiplier: number; }
+// Metal is free-form text on invoices and rules match it as a substring, so there's no clean list to
+// derive from data — this is the curated set worth pricing on. Picked from, never typed.
+const METAL_OPTIONS = ['14k', '18k', 'Gold', 'Rose Gold', 'White Gold', 'Yellow Gold', 'Platinum', 'Titanium', 'Niobium', 'Steel', 'Silver', 'Glass'];
+
+interface EditableRule { metals: string[]; vendors: string[]; multiplier: number; }
+
+const eqi = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
+/** Offered options plus anything already saved that isn't among them, so switching to pick-lists
+ *  can never silently drop a value that's currently driving pricing. */
+const withSaved = (options: string[], saved: string[]): string[] =>
+  [...options, ...saved.filter((s) => !options.some((o) => eqi(o, s)))];
 
 /** Present the stored pricing as editable rule rows. A legacy gold_when config is shown as rules,
  *  splitting metal vs vendor into separate rows so its OR semantics survive the round-trip. */
@@ -16,26 +26,37 @@ function editableRules(p: PricingRules): { rules: EditableRule[]; defaultMult: n
   const defaultMult = p.default_multiplier ?? p.multipliers?.default ?? 3.0;
   let rules: EditableRule[];
   if (p.rules && p.rules.length) {
-    rules = p.rules.map((r) => ({ metals: (r.metals ?? []).join(', '), vendors: (r.vendors ?? []).join(', '), multiplier: r.multiplier }));
+    rules = p.rules.map((r) => ({ metals: r.metals ?? [], vendors: r.vendors ?? [], multiplier: r.multiplier }));
   } else {
     rules = [];
     const gm = p.multipliers?.gold ?? 2.5;
     const metals = p.gold_when?.metal_contains ?? [];
     const vendors = p.gold_when?.vendor_in ?? [];
-    if (metals.length) rules.push({ metals: metals.join(', '), vendors: '', multiplier: gm });
-    if (vendors.length) rules.push({ metals: '', vendors: vendors.join(', '), multiplier: gm });
-    if (!rules.length) rules.push({ metals: '', vendors: '', multiplier: gm });
+    if (metals.length) rules.push({ metals, vendors: [], multiplier: gm });
+    if (vendors.length) rules.push({ metals: [], vendors, multiplier: gm });
+    if (!rules.length) rules.push({ metals: [], vendors: [], multiplier: gm });
   }
   const exempt = p.exempt_categories ?? ['Piercing Fee', 'Service & Tool Fees', 'Diagnostic'];
   return { rules, defaultMult, roundTo, exempt };
 }
 
-function ruleRowHtml(r: EditableRule): string {
+const chip = (cls: string, value: string, checked: boolean): string =>
+  `<label class="chip"><input type="checkbox" class="${cls}" value="${esc(value)}"${checked ? ' checked' : ''}>${esc(value)}</label>`;
+
+function ruleRowHtml(r: EditableRule, vendorList: string[]): string {
+  const on = (list: string[], v: string): boolean => list.some((x) => eqi(x, v));
+  const vendorOpts = withSaved(vendorList, r.vendors);
   return `<div class="rulerow">
-        <input class="rmetals" placeholder="metals — e.g. 14k, gold" value="${esc(r.metals)}">
-        <input class="rvendors" placeholder="vendors — e.g. bvla" value="${esc(r.vendors)}">
-        <input class="rmult" type="number" step="0.1" min="0" value="${esc(String(r.multiplier))}" title="multiplier">
-        <button type="button" class="rmv" title="Remove rule" onclick="this.closest('.rulerow').remove()">&times;</button>
+        <div class="flab">Metals <span class="hint">— any of</span></div>
+        <div class="chips">${withSaved(METAL_OPTIONS, r.metals).map((m) => chip('rm', m, on(r.metals, m))).join('')}</div>
+        <div class="flab">Vendors <span class="hint">— any of</span></div>
+        <div class="chips">${vendorOpts.length ? vendorOpts.map((v) => chip('rv', v, on(r.vendors, v))).join('') : '<span class="hint">No vendors in your catalog yet.</span>'}</div>
+        <div class="rulefoot">
+          <span class="flab" style="margin:0">Multiplier</span>
+          <input class="rmult" type="number" step="0.1" min="0" value="${esc(String(r.multiplier))}">
+          <span class="hint">× wholesale</span>
+          <button type="button" class="rmv" onclick="this.closest('.rulerow').remove()">Remove rule</button>
+        </div>
       </div>`;
 }
 
@@ -43,11 +64,17 @@ export function renderSettingsPage(
   settings: ClientSettings,
   pricing: PricingRules,
   inbound: { common: string; direct: string; account: string | null },
+  lists: { vendors: string[]; categories: string[] },
   connection?: SquareConnection,
   squareStatus?: string | null,
 ): string {
   const { rules: editRules, defaultMult, roundTo, exempt } = editableRules(pricing);
-  const ruleRows = editRules.map(ruleRowHtml).join('');
+  const ruleRows = editRules.map((r) => ruleRowHtml(r, lists.vendors)).join('');
+  const blankRule = ruleRowHtml({ metals: [], vendors: [], multiplier: 2.5 }, lists.vendors);
+  const exemptOpts = withSaved(lists.categories, exempt);
+  const exemptChips = exemptOpts.length
+    ? exemptOpts.map((c) => chip('ex', c, exempt.some((e) => eqi(e, c)))).join('')
+    : '<span class="hint">No categories yet — import your catalog first.</span>';
   const conn = connection ?? { connected: false, merchantId: null, environment: null, locationId: null };
   const banner =
     squareStatus === 'connected'
@@ -93,12 +120,21 @@ export function renderSettingsPage(
   .addr{margin-top:.4rem}
   .addr code{font-size:14px;background:#f3f4f6;padding:.3rem .55rem;border-radius:6px;user-select:all}
   .subh{font-weight:600;font-size:13px;margin:1rem 0 .4rem;color:#374151}
-  .rulehdr{display:grid;grid-template-columns:1fr 1fr 64px 28px;gap:.5rem;font-size:11px;color:#9ca3af;margin-bottom:.25rem;padding:0 .1rem}
-  .rulerow{display:grid;grid-template-columns:1fr 1fr 64px 28px;gap:.5rem;margin:.35rem 0}
-  .rulerow input{padding:.35rem .5rem;border:1px solid #d1d5db;border-radius:6px;font:inherit;min-width:0}
-  .rmv{padding:0;border:1px solid #e5e7eb;background:#fff;color:#b91c1c;border-radius:6px;cursor:pointer;font-size:15px;line-height:1}
+  /* Pick-lists: click a chip to toggle it on/off — nothing is typed. */
+  .chips{display:flex;flex-wrap:wrap;gap:.35rem;margin:.15rem 0 .5rem}
+  .chips.scroll{max-height:190px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:8px;padding:.5rem;background:#fff}
+  .chip{display:inline-flex;align-items:center;padding:.22rem .6rem;border:1px solid #d1d5db;border-radius:999px;
+    font-size:12px;cursor:pointer;user-select:none;background:#fff;color:#374151}
+  .chip input{display:none}
+  .chip:hover{border-color:#166534}
+  .chip:has(input:checked){background:#166534;border-color:#166534;color:#fff}
+  .flab{font-size:12px;font-weight:600;color:#374151;margin-top:.45rem}
+  .hint{font-weight:400;color:#9ca3af;font-size:11px}
+  .rulerow{border:1px solid #e5e7eb;border-radius:8px;padding:.6rem .7rem;margin:.5rem 0;background:#fafafa}
+  .rulefoot{display:flex;align-items:center;gap:.5rem;margin-top:.5rem}
+  .rulefoot input{width:82px;padding:.3rem .45rem;border:1px solid #d1d5db;border-radius:6px;font:inherit}
+  .rmv{margin-left:auto;padding:.28rem .6rem;border:1px solid #e5e7eb;background:#fff;color:#b91c1c;border-radius:6px;cursor:pointer;font:inherit;font-size:12px}
   .addbtn{margin-top:.5rem;padding:.35rem .7rem;border:1px dashed #9ca3af;background:#fff;color:#374151;border-radius:6px;cursor:pointer;font:inherit;font-size:13px}
-  textarea{width:100%;box-sizing:border-box;font:inherit;font-size:13px;padding:.5rem .6rem;border:1px solid #d1d5db;border-radius:6px;resize:vertical}
 </style></head>
 <body>
   <p><a href="/">← Home</a></p>
@@ -127,45 +163,38 @@ export function renderSettingsPage(
     <div class="prow"><label for="defMult">Default multiplier</label><input id="defMult" type="number" step="0.1" min="1" value="${esc(String(defaultMult))}"><span class="ex">× wholesale, when no rule matches</span></div>
 
     <div class="subh">Rules</div>
-    <div class="rulehdr"><span>Metals (any of)</span><span>Vendors (any of)</span><span>×</span><span></span></div>
     <div id="rules">${ruleRows}</div>
+    <template id="ruletpl">${blankRule}</template>
     <button type="button" class="addbtn" onclick="addRule()">+ Add rule</button>
 
     <div class="subh">Fee &amp; service exemptions</div>
-    <div class="d">Items in these categories are priced at cost — <strong>no markup</strong> (piercing fees, tools, diagnostics). One category path per line.</div>
-    <textarea id="exempt" rows="3" spellcheck="false">${esc(exempt.join('\n'))}</textarea>
+    <div class="d">Click a category to price it at cost — <strong>no markup</strong> (piercing fees, tools, diagnostics). Click again to remove it.</div>
+    <div class="chips scroll">${exemptChips}</div>
 
     <div class="subh">Rounding</div>
     <div class="prow"><label for="roundTo">Round up to</label><input id="roundTo" type="number" step="5" min="1" value="${esc(String(roundTo))}"><span class="ex">cents (50 = nearest $0.50)</span></div>
   </div>
   <button id="save" onclick="save()">Save</button><span id="status"></span>
 <script>
-function splitCsv(v){ return (v||'').split(',').map(function(x){return x.trim();}).filter(Boolean); }
+function checkedIn(root, sel){ return [].slice.call(root.querySelectorAll(sel)).map(function(i){ return i.value; }); }
 function collectRules(){
   var out=[];
   document.querySelectorAll('#rules .rulerow').forEach(function(row){
-    var metals=splitCsv(row.querySelector('.rmetals').value);
-    var vendors=splitCsv(row.querySelector('.rvendors').value);
+    var metals=checkedIn(row,'.rm:checked');
+    var vendors=checkedIn(row,'.rv:checked');
     var mult=parseFloat(row.querySelector('.rmult').value);
     if((metals.length||vendors.length) && isFinite(mult) && mult>0) out.push({metals:metals,vendors:vendors,multiplier:mult});
   });
   return out;
 }
 function addRule(){
-  var wrap=document.createElement('div'); wrap.className='rulerow';
-  function mk(cls,ph,num){ var i=document.createElement('input'); i.className=cls; if(ph)i.placeholder=ph; if(num){i.type='number';i.step='0.1';i.min='0';} return i; }
-  wrap.appendChild(mk('rmetals','metals — e.g. 14k, gold'));
-  wrap.appendChild(mk('rvendors','vendors — e.g. bvla'));
-  wrap.appendChild(mk('rmult','',true));
-  var rm=document.createElement('button'); rm.type='button'; rm.className='rmv'; rm.title='Remove rule'; rm.textContent='×';
-  rm.addEventListener('click', function(){ wrap.remove(); });
-  wrap.appendChild(rm);
-  document.getElementById('rules').appendChild(wrap);
+  var tpl=document.getElementById('ruletpl');
+  document.getElementById('rules').appendChild(tpl.content.cloneNode(true));
 }
 async function save(){
   var b=document.getElementById('save'), s=document.getElementById('status');
   b.disabled=true; s.textContent='Saving…';
-  var exempt=(document.getElementById('exempt').value||'').split('\\n').map(function(x){return x.trim();}).filter(Boolean);
+  var exempt=checkedIn(document,'.ex:checked');
   var pricing={rules:collectRules(),default:parseFloat(document.getElementById('defMult').value),roundTo:parseInt(document.getElementById('roundTo').value,10),exempt:exempt};
   try{
     var res=await fetch('/settings',{method:'POST',headers:{'content-type':'application/json'},
