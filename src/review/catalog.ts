@@ -158,7 +158,9 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Catalog review</title>
 <style>
-  body{font-family:system-ui,-apple-system,sans-serif;margin:0 auto;max-width:1280px;color:#1a1a1a;padding:1.25rem 1rem}
+  body{font-family:system-ui,-apple-system,sans-serif;margin:0 auto;max-width:1500px;color:#1a1a1a;padding:1.25rem 1rem}
+  /* Contain the wide table's horizontal overflow so it can't bleed past the pinned header on the side. */
+  .tablewrap{overflow-x:auto}
   h2{margin:0 0 .25rem} .sub{color:#555;margin:0 0 .75rem;font-size:14px}
   /* The preview + control bar stay pinned to the top; only the table scrolls beneath them. */
   #stickytop{position:sticky;top:0;z-index:10;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.06)}
@@ -280,10 +282,12 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   </div>
   <div id="phototray" hidden></div>
   </div><!-- /stickytop -->
+  <div class="tablewrap">
   <table>
     <thead><tr><th><input type="checkbox" id="chkall"></th><th></th><th class="sortable" data-key="item">Item &amp; description</th><th class="sortable" data-key="variation">Variation</th><th class="sortable" data-key="category">Category</th><th class="sortable" data-key="vendor">Vendor</th><th class="sortable" data-key="sku">SKU</th><th class="sortable" data-key="wholesale">Wholesale</th><th class="sortable" data-key="retail">Retail</th><th class="sortable" data-key="status">Status</th><th></th></tr></thead>
     <tbody>${body}</tbody>
   </table>
+  </div>
 <script>
 var activeSeq=null, activeTr=null, activeCap='';
 function setActive(tr){ document.querySelectorAll('tr.active').forEach(function(t){t.classList.remove('active');}); if(tr) tr.classList.add('active'); }
