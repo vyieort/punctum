@@ -45,7 +45,8 @@ import { renderOnboardingPage } from './review/onboarding.js';
 import { ingestInboundEmail, parsePostmarkInbound, ensureInboundToken, inboundAddressFor, commonInboundAddress } from './lib/inbound-email.js';
 import { extractAndClassify } from './lib/merged.js';
 import { diffExtractions } from './lib/extraction-diff.js';
-import { loadVendorHints } from './lib/vendor-profile.js';
+import { loadVendorHints, listVendorProfiles, trainVendorProfile } from './lib/vendor-profile.js';
+import { renderVendorsPage } from './review/vendors-page.js';
 import { maybeCompressPdf } from './lib/pdf-compress.js';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -533,6 +534,7 @@ const renderHome = (sess: { email: string | null; clientId: string }): string =>
     <li><a href="/jobs/categories/provision">Provision categories</a><div class="d">Create the category tree in the connected Square account (run once on a fresh account).</div></li>
     <li><a href="/square/verify">Square connection check</a><div class="d">Confirm the connected Square token + location are reachable.</div></li>
     <li><a href="/compare">Compare pipelines (A/B)</a><div class="d">Diff two-pass vs one-pass extraction on a PDF &mdash; no writes.</div></li>
+    <li><a href="/vendors">Vendors (train parsing)</a><div class="d">Add a vendor yourself: upload a sample invoice, correct what it read wrong, and it learns &mdash; for every studio.</div></li>
     <li><a href="/jobs/vendor-eval">Vendor profile eval</a><div class="d">Extract a PDF with vs without vendor hints and see the diff &mdash; test a vendor profile before trusting it.</div></li>
   </ul>
 
@@ -1435,6 +1437,79 @@ const server = createServer(async (req, res) => {
       }
       return;
     }
+  }
+
+  // Vendors: a studio trains a vendor itself — upload a sample invoice, correct the parsed lines,
+  // and the corrections become that vendor's SHARED parsing profile (#42).
+  if (url.pathname === '/vendors' && req.method === 'GET') {
+    try {
+      const pool = getPool() as unknown as Queryable;
+      const [profiles, vend] = await Promise.all([
+        listVendorProfiles(pool),
+        pool.query(`select distinct vendor from catalog_mapping where client_id = $1 and coalesce(vendor,'') <> '' order by vendor`, [authedClient]),
+      ]);
+      const vendors = vend.rows.map((r) => String((r as { vendor: string }).vendor));
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(renderVendorsPage({ profiles, vendors }));
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+  // Parse a sample invoice for training — applies the vendor's existing profile so each pass starts
+  // from what's already been learned. Read-only: nothing is stored.
+  if (url.pathname === '/vendors/parse' && req.method === 'POST') {
+    try {
+      const raw = await readBodyBuffer(req);
+      const body = JSON.parse(raw.toString('utf8') || '{}') as { vendorName?: string; pdfBase64?: string };
+      if (!body.vendorName || !body.pdfBase64) {
+        sendJson(res, 400, { error: 'vendorName and pdfBase64 are required' });
+        return;
+      }
+      const hints = await loadVendorHints(getPool() as unknown as Queryable, body.vendorName);
+      const { base64: pdf } = await maybeCompressPdf(body.pdfBase64);
+      const merged = await extractAndClassify(pdf, {}, hints);
+      const lines = merged.items.map((i) => {
+        const it = i as unknown as Record<string, unknown>;
+        const t = (v: unknown): string => (v == null ? '' : String(v));
+        return {
+          description: t(it.description),
+          sku: t(it.sku),
+          item_name: t(it.item_name),
+          variation_name: t(it.variation_name),
+          gems: t(it.gems),
+          metal: t(it.metal),
+          is_product: it.is_product !== false,
+        };
+      });
+      sendJson(res, 200, { vendorName: merged.vendor_name || body.vendorName, lines });
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+  // Fold this sample's corrections into the shared vendor profile.
+  if (url.pathname === '/vendors/train' && req.method === 'POST') {
+    try {
+      const raw = await readBodyBuffer(req);
+      const body = JSON.parse(raw.toString('utf8') || '{}') as {
+        vendorName?: string; before?: unknown; after?: unknown; guidance?: string;
+      };
+      if (!body.vendorName) {
+        sendJson(res, 400, { error: 'vendorName required' });
+        return;
+      }
+      const { profile, learned } = await trainVendorProfile(getPool() as unknown as Queryable, {
+        vendorName: body.vendorName,
+        before: Array.isArray(body.before) ? body.before : [],
+        after: Array.isArray(body.after) ? body.after : [],
+        guidance: body.guidance,
+      });
+      sendJson(res, 200, { ok: true, learned, sampleCount: profile.sampleCount, examples: profile.examples.length });
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
   }
 
   // Vendor-profile eval: GET serves the page; POST extracts one uploaded PDF twice (baseline vs

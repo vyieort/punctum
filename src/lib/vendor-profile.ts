@@ -41,16 +41,7 @@ function safeJson(s: string): unknown {
   }
 }
 
-export async function getVendorProfile(db: Queryable, vendorName: string): Promise<VendorProfile | null> {
-  const key = normalizeVendorKey(vendorName);
-  if (!key) return null;
-  const { rows } = await db.query(
-    `select vendor_key, display_name, guidance, examples, sample_count, status
-       from vendor_profiles where vendor_key = $1`,
-    [key],
-  );
-  if (rows.length === 0) return null;
-  const r = rows[0] as Record<string, unknown>;
+function toProfile(r: Record<string, unknown>): VendorProfile {
   return {
     vendorKey: String(r.vendor_key),
     displayName: String(r.display_name ?? ''),
@@ -59,6 +50,26 @@ export async function getVendorProfile(db: Queryable, vendorName: string): Promi
     sampleCount: Number(r.sample_count ?? 0),
     status: String(r.status ?? 'active'),
   };
+}
+
+export async function getVendorProfile(db: Queryable, vendorName: string): Promise<VendorProfile | null> {
+  const key = normalizeVendorKey(vendorName);
+  if (!key) return null;
+  const { rows } = await db.query(
+    `select vendor_key, display_name, guidance, examples, sample_count, status
+       from vendor_profiles where vendor_key = $1`,
+    [key],
+  );
+  return rows.length ? toProfile(rows[0] as Record<string, unknown>) : null;
+}
+
+/** Every learned vendor (shared across clients) — what the Vendors page lists. */
+export async function listVendorProfiles(db: Queryable): Promise<VendorProfile[]> {
+  const { rows } = await db.query(
+    `select vendor_key, display_name, guidance, examples, sample_count, status
+       from vendor_profiles order by display_name`,
+  );
+  return rows.map((r) => toProfile(r as Record<string, unknown>));
 }
 
 /** Create or refine a vendor profile. Merges guidance/examples when provided; only touches fields
@@ -114,4 +125,65 @@ export function renderVendorHints(profile: VendorProfile | null): string {
 /** Load + render a vendor's hint fragment in one call (or '' if no profile). */
 export async function loadVendorHints(db: Queryable, vendorName: string): Promise<string> {
   return renderVendorHints(await getVendorProfile(db, vendorName));
+}
+
+// --- Training: turn a studio's line-level corrections into reusable examples ---
+
+/** The subset of an extracted line a studio confirms/corrects on the Vendors page. */
+export interface TrainingLine {
+  description?: string; // the raw invoice text (identifies the line; not corrected)
+  sku?: string;
+  item_name?: string;
+  variation_name?: string;
+  gems?: string;
+  metal?: string;
+  is_product?: boolean;
+}
+
+const TRAINED_FIELDS = ['sku', 'item_name', 'variation_name', 'gems', 'metal', 'is_product'] as const;
+const asText = (v: unknown): string => (v == null ? '' : String(v));
+
+/**
+ * Diff what the model extracted against what the studio corrected, and emit one worked example per
+ * changed line: the raw invoice text -> the fields that should have been read. These get injected
+ * into future extractions for this vendor (see renderVendorHints), which is how a vendor "learns".
+ */
+export function distillCorrections(before: TrainingLine[], after: TrainingLine[], limit = 12): VendorExample[] {
+  const out: VendorExample[] = [];
+  for (let i = 0; i < Math.min(before.length, after.length); i++) {
+    const b = (before[i] ?? {}) as Record<string, unknown>;
+    const a = (after[i] ?? {}) as Record<string, unknown>;
+    const changed = TRAINED_FIELDS.filter((f) => asText(b[f]) !== asText(a[f])).map((f) => `${f}=${JSON.stringify(asText(a[f]))}`);
+    if (changed.length === 0) continue;
+    const raw = asText(b.description).trim() || asText(b.sku).trim();
+    if (!raw) continue; // nothing to key the example on
+    out.push({ before: raw, after: changed.join('; ') });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** Fold one sample invoice's corrections into the shared vendor profile (merged, deduped, capped). */
+export async function trainVendorProfile(
+  db: Queryable,
+  input: { vendorName: string; before: TrainingLine[]; after: TrainingLine[]; guidance?: string },
+): Promise<{ profile: VendorProfile; learned: number }> {
+  const fresh = distillCorrections(input.before, input.after);
+  const existing = await getVendorProfile(db, input.vendorName);
+  const seen = new Set<string>();
+  const merged: VendorExample[] = [];
+  for (const e of [...(existing?.examples ?? []), ...fresh]) {
+    const k = `${e.before}=>${e.after}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    merged.push(e);
+  }
+  const guidance = input.guidance?.trim() ? input.guidance.trim() : undefined;
+  const profile = await upsertVendorProfile(db, {
+    vendorName: input.vendorName,
+    examples: merged.slice(-24), // keep the most recent
+    guidance,
+    incSample: true,
+  });
+  return { profile, learned: fresh.length };
 }

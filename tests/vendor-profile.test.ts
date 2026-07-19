@@ -8,6 +8,7 @@ import { PGlite } from '@electric-sql/pglite';
 import type { Queryable } from '../src/jobs/pg-rows.js';
 import {
   normalizeVendorKey, getVendorProfile, upsertVendorProfile, renderVendorHints, loadVendorHints,
+  distillCorrections, trainVendorProfile, listVendorProfiles,
 } from '../src/lib/vendor-profile.js';
 import { buildExtractionInstruction } from '../src/lib/merged.js';
 
@@ -56,6 +57,59 @@ test('renderVendorHints: empty -> "", guidance + examples included, disabled -> 
   assert.match(h, /Pair accent gems/);
   assert.match(h, /2\.0 CZ => gem CZ/);
   assert.equal(renderVendorHints({ vendorKey: 'ana', displayName: 'Anatometal', guidance: 'x', examples: [], sampleCount: 1, status: 'disabled' }), '');
+});
+
+test('distillCorrections emits one example per corrected line, keyed on the raw invoice text', () => {
+  const before = [
+    { description: '18ga Ti bezel 4mm onyx cabochon', gems: '', item_name: 'Bezel End' },
+    { description: 'Threading add-on', is_product: true },
+    { description: 'unchanged line', sku: 'X1', gems: 'y' },
+  ];
+  const after = [
+    { description: '18ga Ti bezel 4mm onyx cabochon', gems: '4mm Onyx Cabochon', item_name: 'Bezel End' },
+    { description: 'Threading add-on', is_product: false },
+    { description: 'unchanged line', sku: 'X1', gems: 'y' },
+  ];
+  const ex = distillCorrections(before, after);
+  assert.equal(ex.length, 2); // the unchanged line is skipped
+  assert.equal(ex[0]!.before, '18ga Ti bezel 4mm onyx cabochon');
+  assert.match(ex[0]!.after ?? '', /gems="4mm Onyx Cabochon"/);
+  assert.doesNotMatch(ex[0]!.after ?? '', /item_name/); // only CHANGED fields are taught
+  assert.match(ex[1]!.after ?? '', /is_product="false"/);
+});
+
+test('distillCorrections ignores a line with no raw text to key on', () => {
+  assert.deepEqual(distillCorrections([{ gems: '' }], [{ gems: 'ruby' }]), []);
+});
+
+test('trainVendorProfile merges + dedupes examples, bumps sample count, and lists the vendor', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  const before = [{ description: 'line A', gems: '' }];
+  const after = [{ description: 'line A', gems: '3mm Opal' }];
+
+  let r = await trainVendorProfile(q, { vendorName: 'Quetzalli', before, after, guidance: 'Gems live in the description.' });
+  assert.equal(r.learned, 1);
+  assert.equal(r.profile.sampleCount, 1);
+  assert.equal(r.profile.examples.length, 1);
+  assert.match(r.profile.guidance, /description/);
+
+  // Same correction again -> deduped, but it still counts as another confirmed sample.
+  r = await trainVendorProfile(q, { vendorName: 'quetzalli', before, after });
+  assert.equal(r.profile.sampleCount, 2);
+  assert.equal(r.profile.examples.length, 1);
+  assert.match(r.profile.guidance, /description/); // guidance omitted -> preserved
+
+  // A new correction appends.
+  r = await trainVendorProfile(q, { vendorName: 'Quetzalli', before: [{ description: 'line B', sku: '' }], after: [{ description: 'line B', sku: 'QZ-9' }] });
+  assert.equal(r.profile.examples.length, 2);
+
+  const all = await listVendorProfiles(q);
+  assert.equal(all.length, 1);
+  assert.equal(all[0]!.displayName, 'Quetzalli');
+
+  // And the learned examples flow into the injected hints.
+  assert.match(await loadVendorHints(q, 'Quetzalli'), /line A => gems="3mm Opal"/);
 });
 
 test('loadVendorHints loads + renders in one call', async () => {
