@@ -47,6 +47,8 @@ import { extractAndClassify } from './lib/merged.js';
 import { diffExtractions } from './lib/extraction-diff.js';
 import { loadVendorHints, listVendorProfiles, trainVendorProfile } from './lib/vendor-profile.js';
 import { renderVendorsPage } from './review/vendors-page.js';
+import { listNotifications, resolveNotification, tenantHealth, isAdminEmail, type Notification } from './lib/notifications.js';
+import { renderAdminPage } from './review/admin-page.js';
 import { maybeCompressPdf } from './lib/pdf-compress.js';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -491,7 +493,29 @@ async function run(){
 // the signed-in user + their tenant show up top, and this stays the living index as we build.
 const escHome = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-const renderHome = (sess: { email: string | null; clientId: string }): string => `<!doctype html>
+/** The studio's own open alerts, surfaced at the top of home so nothing needing attention is buried. */
+const homeAlerts = (items: Notification[]): string => {
+  if (items.length === 0) return '';
+  const rows = items
+    .map((n) => {
+      const act = n.actionUrl ? ` <a href="${escHome(n.actionUrl)}">Fix it &rarr;</a>` : '';
+      return `<li data-id="${escHome(n.id)}"><strong>${escHome(n.title)}</strong>${n.detail ? ` &mdash; ${escHome(n.detail)}` : ''}${act}
+        <button onclick="dismissAlert('${escHome(n.id)}')">Dismiss</button></li>`;
+    })
+    .join('');
+  return `<div id="alerts"><div class="ahead">Needs your attention</div><ul>${rows}</ul></div>
+<script>
+async function dismissAlert(id){
+  try{
+    var r=await fetch('/notifications/'+encodeURIComponent(id)+'/resolve',{method:'POST'});
+    if(r.ok){ var el=document.querySelector('#alerts li[data-id="'+id+'"]'); if(el) el.remove();
+      if(!document.querySelectorAll('#alerts li').length){ document.getElementById('alerts').remove(); } }
+  }catch(e){}
+}
+</script>`;
+};
+
+const renderHome = (sess: { email: string | null; clientId: string; alerts?: Notification[]; isAdmin?: boolean }): string => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Punctum</title>
 <style>
@@ -506,11 +530,19 @@ const renderHome = (sess: { email: string | null; clientId: string }): string =>
   code{background:#f3f4f6;padding:.05rem .3rem;border-radius:4px;font-size:12px}
   .userbar{display:flex;justify-content:space-between;align-items:center;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:.5rem .8rem;font-size:13px;color:#374151;margin-bottom:1.25rem}
   .userbar a{color:#b91c1c;font-weight:600;font-size:13px}
+  #alerts{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:.7rem .9rem;margin-bottom:1.5rem}
+  #alerts .ahead{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#92400e;font-weight:700;margin-bottom:.35rem}
+  #alerts ul{list-style:none;margin:0;padding:0}
+  #alerts li{padding:.3rem 0;border-bottom:1px solid #fde68a;font-size:13.5px;color:#3f2d0b}
+  #alerts li:last-child{border-bottom:0}
+  #alerts li a{color:#166534;font-weight:600;font-size:13px}
+  #alerts button{margin-left:.5rem;padding:.1rem .45rem;border:1px solid #e5d08a;background:#fff;color:#92400e;border-radius:5px;cursor:pointer;font:inherit;font-size:11px}
 </style></head>
 <body>
   <div class="userbar"><span>Signed in as <strong>${escHome(sess.email ?? 'you')}</strong> &middot; tenant <code>${escHome(sess.clientId)}</code></span><a href="/logout">Log out</a></div>
   <h1>Punctum</h1>
   <p class="tag">Invoice &rarr; Square catalog automation</p>
+  ${homeAlerts(sess.alerts ?? [])}
 
   <h2>Invoices</h2>
   <ul>
@@ -548,6 +580,7 @@ const renderHome = (sess: { email: string | null; clientId: string }): string =>
     <li><a href="/settings">Settings</a><div class="d">Connect Square, your email-in address for invoices, pricing rules, and the product-photo auto-enrich toggle.</div></li>
     <li><a href="/logout">Log out</a><div class="d">End your session and return to the sign-in page.</div></li>
     <li><a href="/whoami">Session info</a><div class="d">Your user id and current tenant (JSON).</div></li>
+    ${sess.isAdmin ? '<li><a href="/admin">Admin &mdash; platform health</a><div class="d">Every studio\'s status and all open alerts across the platform.</div></li>' : ''}
   </ul>
 
   <h2 class="danger">Danger zone</h2>
@@ -936,8 +969,13 @@ const server = createServer(async (req, res) => {
   }
 
   if (url.pathname === '/' && req.method === 'GET') {
+    const alerts = await listNotifications(getPool() as unknown as Queryable, {
+      clientId: authedClient,
+      audience: 'client',
+      limit: 8,
+    }).catch(() => [] as Notification[]);
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(renderHome({ email: session.user.email, clientId: authedClient }));
+    res.end(renderHome({ email: session.user.email, clientId: authedClient, alerts, isAdmin: isAdminEmail(session.user.email) }));
     return;
   }
 
@@ -1432,6 +1470,37 @@ const server = createServer(async (req, res) => {
         const filename = url.searchParams.get('filename') ?? undefined;
         const result = await runComparison(pdf.toString('base64'));
         sendJson(res, 200, { file: filename, ...result });
+      } catch (err) {
+        sendJson(res, 500, { error: (err as Error).message });
+      }
+      return;
+    }
+  }
+
+  // Platform admin: every tenant's health + all open notifications. Gated on ADMIN_EMAILS.
+  if (url.pathname === '/admin' && req.method === 'GET') {
+    if (!isAdminEmail(session.user.email)) {
+      sendJson(res, 403, { error: 'not an admin' });
+      return;
+    }
+    try {
+      const pool = getPool() as unknown as Queryable;
+      const [tenants, notifications] = await Promise.all([tenantHealth(pool), listNotifications(pool, { limit: 200 })]);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(renderAdminPage({ tenants, notifications }));
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+  // Resolve a notification. Admins can clear any; a studio can only clear its own.
+  {
+    const parts = url.pathname.split('/').filter(Boolean);
+    if (parts[0] === 'notifications' && parts.length === 3 && parts[2] === 'resolve' && req.method === 'POST') {
+      try {
+        const admin = isAdminEmail(session.user.email);
+        const ok = await resolveNotification(getPool() as unknown as Queryable, decodeURIComponent(parts[1]!), admin ? undefined : authedClient);
+        sendJson(res, ok ? 200 : 404, { ok });
       } catch (err) {
         sendJson(res, 500, { error: (err as Error).message });
       }
