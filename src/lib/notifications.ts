@@ -90,16 +90,43 @@ export async function raiseNotification(db: Queryable, input: NotificationInput)
   return rows.length ? { id: String((rows[0] as { id: string }).id), created: true } : { id: null, created: false };
 }
 
+/**
+ * The call site everything else should use: record it, then try to email it. Email failures are
+ * swallowed on purpose — a notification that's saved but undelivered is recoverable; a push that
+ * crashed because the mail server was down is not. Deduped alerts aren't re-emailed.
+ */
+export async function raiseAndDeliver(
+  db: Queryable,
+  input: NotificationInput,
+  ops?: DeliverOps,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ id: string | null; created: boolean; delivered: boolean }> {
+  const { id, created } = await raiseNotification(db, input);
+  if (!created || !id || !ops) return { id, created, delivered: false };
+  try {
+    const [n] = await listNotifications(db, { includeResolved: true, limit: 1, id });
+    if (!n) return { id, created, delivered: false };
+    return { id, created, delivered: await deliverNotification(db, n, ops, env) };
+  } catch {
+    return { id, created, delivered: false }; // stays visible in-app; email can be retried later
+  }
+}
+
 export interface ListOpts {
   clientId?: string; // a studio's own notifications
   audience?: Audience;
   includeResolved?: boolean;
   limit?: number;
+  id?: string; // fetch one
 }
 
 export async function listNotifications(db: Queryable, opts: ListOpts = {}): Promise<Notification[]> {
   const where: string[] = [];
   const params: unknown[] = [];
+  if (opts.id) {
+    params.push(opts.id);
+    where.push(`id = $${params.length}`);
+  }
   if (opts.clientId) {
     params.push(opts.clientId);
     where.push(`client_id = $${params.length}`);
@@ -159,12 +186,63 @@ export async function tenantHealth(db: Queryable): Promise<Array<{ clientId: str
   });
 }
 
-/** Platform admins, by email, from ADMIN_EMAILS (comma-separated). No admin => no /admin access. */
-export function isAdminEmail(email: string | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
-  const list = (env.ADMIN_EMAILS ?? '')
+/** Platform admin addresses from ADMIN_EMAILS (comma-separated). */
+export function adminEmails(env: NodeJS.ProcessEnv = process.env): string[] {
+  return (env.ADMIN_EMAILS ?? '')
     .split(',')
-    .map((s) => s.trim().toLowerCase())
+    .map((s) => s.trim())
     .filter(Boolean);
+}
+
+/** Platform admins, by email. No ADMIN_EMAILS => nobody is admin (so /admin stays closed). */
+export function isAdminEmail(email: string | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
   const e = (email ?? '').trim().toLowerCase();
-  return Boolean(e) && list.includes(e);
+  return Boolean(e) && adminEmails(env).some((a) => a.toLowerCase() === e);
+}
+
+// --- Email channel -----------------------------------------------------------------------------
+
+/** Who should hear about this: the studio's notification list, or the platform admins. */
+export async function recipientsFor(db: Queryable, n: Notification, env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
+  if (n.audience === 'admin') return adminEmails(env);
+  if (!n.clientId) return [];
+  const { rows } = await db.query(`select notification_emails from client_config where client_id = $1`, [n.clientId]);
+  const raw = (rows[0] as { notification_emails?: unknown } | undefined)?.notification_emails;
+  if (Array.isArray(raw)) return raw.map((x) => String(x)).filter(Boolean);
+  // Postgres text[] can come back as a literal '{a,b}' depending on the driver.
+  if (typeof raw === 'string') return raw.replace(/^\{|\}$/g, '').split(',').map((s) => s.replace(/^"|"$/g, '').trim()).filter(Boolean);
+  return [];
+}
+
+/** Plain-text alert email. Every alert carries the link that actually fixes it. */
+export function formatNotificationEmail(n: Notification, baseUrl = ''): { subject: string; text: string } {
+  const base = baseUrl.replace(/\/$/, '');
+  const lines = [n.title];
+  if (n.detail) lines.push('', n.detail);
+  if (n.clientId) lines.push('', `Studio: ${n.clientId}`);
+  if (n.actionUrl) lines.push('', `Fix it: ${n.actionUrl.startsWith('http') ? n.actionUrl : base + n.actionUrl}`);
+  if (Object.keys(n.context).length) lines.push('', `Details: ${JSON.stringify(n.context)}`);
+  return { subject: `[Punctum] ${n.title}`, text: lines.join('\n') };
+}
+
+export interface DeliverOps {
+  send: (msg: { to: string[]; subject: string; text: string }) => Promise<unknown>;
+}
+
+/**
+ * Email a notification to its audience and stamp delivered_at. Best-effort by design: the caller
+ * shouldn't fail (e.g. an invoice push shouldn't break) just because email is down or unconfigured.
+ */
+export async function deliverNotification(
+  db: Queryable,
+  n: Notification,
+  ops: DeliverOps,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const to = await recipientsFor(db, n, env);
+  if (to.length === 0) return false;
+  const { subject, text } = formatNotificationEmail(n, env.APP_BASE_URL ?? '');
+  await ops.send({ to, subject, text });
+  await db.query(`update notifications set delivered_at = now() where id = $1`, [n.id]);
+  return true;
 }

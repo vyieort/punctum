@@ -47,8 +47,9 @@ import { extractAndClassify } from './lib/merged.js';
 import { diffExtractions } from './lib/extraction-diff.js';
 import { loadVendorHints, listVendorProfiles, trainVendorProfile } from './lib/vendor-profile.js';
 import { renderVendorsPage } from './review/vendors-page.js';
-import { listNotifications, resolveNotification, tenantHealth, isAdminEmail, type Notification } from './lib/notifications.js';
+import { listNotifications, resolveNotification, tenantHealth, isAdminEmail, adminEmails, type Notification } from './lib/notifications.js';
 import { renderAdminPage } from './review/admin-page.js';
+import { sendEmail, isMailerConfigured } from './lib/mailer.js';
 import { maybeCompressPdf } from './lib/pdf-compress.js';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -1487,7 +1488,30 @@ const server = createServer(async (req, res) => {
       const pool = getPool() as unknown as Queryable;
       const [tenants, notifications] = await Promise.all([tenantHealth(pool), listNotifications(pool, { limit: 200 })]);
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(renderAdminPage({ tenants, notifications }));
+      res.end(renderAdminPage({ tenants, notifications, mailerConfigured: isMailerConfigured() }));
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+  // Prove the Postmark setup works end to end before relying on it for real alerts.
+  if (url.pathname === '/admin/test-email' && req.method === 'POST') {
+    if (!isAdminEmail(session.user.email)) {
+      sendJson(res, 403, { error: 'not an admin' });
+      return;
+    }
+    const to = adminEmails();
+    if (to.length === 0) {
+      sendJson(res, 400, { error: 'ADMIN_EMAILS is not set' });
+      return;
+    }
+    try {
+      const r = await sendEmail({
+        to,
+        subject: '[Punctum] Test email',
+        text: 'If you are reading this, Punctum can send alerts.\n\nSent from the admin page.',
+      });
+      sendJson(res, 200, { ok: true, to, messageId: r.messageId });
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }

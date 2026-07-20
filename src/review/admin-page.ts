@@ -20,6 +20,7 @@ function ago(iso: string): string {
 export interface AdminPageState {
   tenants: Array<{ clientId: string; name: string; open: number }>;
   notifications: Notification[];
+  mailerConfigured?: boolean;
 }
 
 export function renderAdminPage(s: AdminPageState): string {
@@ -68,10 +69,17 @@ export function renderAdminPage(s: AdminPageState): string {
   .tag{background:#ede9fe;color:#5b21b6;border-radius:4px;padding:.02rem .3rem;font-size:10px}
   .ctx{color:#9ca3af;margin-top:.2rem}
   button{padding:.25rem .6rem;border:1px solid #d1d5db;background:#fff;border-radius:6px;cursor:pointer;font:inherit;font-size:12px}
+  .mailcheck{background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:.55rem .8rem;font-size:13px;margin-top:1rem}
+  .mailcheck button{margin-left:.6rem} #mailstatus{margin-left:.6rem;font-size:12px;color:#374151}
 </style></head>
 <body>
   <h2>Admin</h2>
   <p>Platform health across every studio. Alerts land here when they're the platform's problem, or when a studio's problem has gone unattended.</p>
+
+  <div class="mailcheck">
+    <strong>Email delivery:</strong> ${s.mailerConfigured ? '<span class="ok">configured</span>' : '<span style="color:#b45309">not configured</span> — set POSTMARK_SERVER_TOKEN + ALERT_FROM_EMAIL'}
+    <button onclick="testEmail()">Send test email</button><span id="mailstatus"></span>
+  </div>
 
   <h3>Tenants</h3>
   <table><thead><tr><th>Studio</th><th>Client id</th><th>Alerts</th></tr></thead><tbody>${tenantRows}</tbody></table>
@@ -79,6 +87,14 @@ export function renderAdminPage(s: AdminPageState): string {
   <h3>Open notifications</h3>
   <table><thead><tr><th>Sev</th><th>What</th><th>Studio</th><th>Type</th><th>When</th><th></th></tr></thead><tbody>${rows}</tbody></table>
 <script>
+async function testEmail(){
+  var s=document.getElementById('mailstatus'); s.textContent='Sending…';
+  try{
+    var res=await fetch('/admin/test-email',{method:'POST'});
+    var j=await res.json();
+    s.textContent = res.ok ? ('Sent to '+(j.to||[]).join(', ')+' — check your inbox.') : ('Error: '+(j.error||res.status));
+  }catch(e){ s.textContent='Error: '+e.message; }
+}
 async function resolveIt(id){
   try{
     var res=await fetch('/notifications/'+encodeURIComponent(id)+'/resolve',{method:'POST'});
