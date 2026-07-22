@@ -3,6 +3,7 @@
 // /admin); email becomes a second channel once an outbound provider is picked.
 
 import type { Queryable } from '../jobs/pg-rows.js';
+import { appBaseUrl } from './app-url.js';
 
 export type Audience = 'client' | 'admin';
 export type Severity = 'info' | 'warn' | 'error';
@@ -241,7 +242,7 @@ export async function deliverNotification(
 ): Promise<boolean> {
   const to = await recipientsFor(db, n, env);
   if (to.length === 0) return false;
-  const { subject, text } = formatNotificationEmail(n, env.APP_BASE_URL ?? '');
+  const { subject, text } = formatNotificationEmail(n, appBaseUrl(env));
   await ops.send({ to, subject, text });
   await db.query(`update notifications set delivered_at = now() where id = $1`, [n.id]);
   return true;

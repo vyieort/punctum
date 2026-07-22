@@ -157,8 +157,10 @@ export function renderSettingsPage(
     <div class="t">Email invoices in</div>
     <div class="d">Forward a vendor invoice PDF from your account email${inbound.account ? ` (<strong>${esc(inbound.account)}</strong>)` : ''} to the address below and it lands in your review queue automatically — no manual upload.</div>
     <div class="addr"><code>${esc(inbound.common)}</code></div>
-    <div class="d" style="margin-top:.7rem">Or point a vendor straight at your studio's private address (no forwarding needed):</div>
-    <div class="addr"><code>${esc(inbound.direct)}</code></div>
+    ${inbound.direct
+      ? `<div class="d" style="margin-top:.7rem">Or point a vendor straight at your studio's private address (no forwarding needed):</div>
+    <div class="addr"><code>${esc(inbound.direct)}</code></div>`
+      : ''}
   </div>
   <div class="card">
     <label class="toggle">

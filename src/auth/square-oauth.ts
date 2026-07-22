@@ -3,6 +3,7 @@
 // SQUARE_APP_ID / SQUARE_APP_SECRET; SQUARE_OAUTH_ENV picks sandbox vs production. fetch injectable.
 
 import type { SquareEnv } from '../lib/square-client.js';
+import { appBaseUrl } from '../lib/app-url.js';
 
 const OAUTH_HOSTS: Record<SquareEnv, string> = {
   sandbox: 'https://connect.squareupsandbox.com',
@@ -25,8 +26,8 @@ export function oauthConfigFromEnv(env: NodeJS.ProcessEnv = process.env): OAuthC
   const appSecret = env.SQUARE_APP_SECRET;
   if (!appId || !appSecret) throw new Error('SQUARE_APP_ID / SQUARE_APP_SECRET not set');
   const oenv: SquareEnv = env.SQUARE_OAUTH_ENV === 'production' ? 'production' : 'sandbox';
-  const base = env.APP_BASE_URL ?? 'https://punctum-production.up.railway.app';
-  return { appId, appSecret, env: oenv, redirectUri: `${base}/oauth/square/callback` };
+  // Must byte-match the Redirect URL registered in the Square dashboard (per environment).
+  return { appId, appSecret, env: oenv, redirectUri: `${appBaseUrl(env)}/oauth/square/callback` };
 }
 
 export function squareAuthorizeUrl(cfg: OAuthConfig, state: string): string {

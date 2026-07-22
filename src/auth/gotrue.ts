@@ -3,6 +3,8 @@
 // (asymmetric) only affects verification (session.ts), not obtaining tokens. fetch is injectable
 // for tests.
 
+import { appBaseUrl } from '../lib/app-url.js';
+
 type FetchImpl = typeof globalThis.fetch;
 
 export interface Tokens {
@@ -62,8 +64,7 @@ export async function signUp(email: string, password: string, o: GoTrueConfig = 
   // Where the confirmation email link sends the user after Supabase verifies the token. Points at
   // our callback page, which turns the returned session into cookies. Must ALSO be allow-listed in
   // Supabase Auth → Redirect URLs.
-  const base = process.env.APP_BASE_URL ?? 'https://punctum-production.up.railway.app';
-  const redirectTo = `${base}/auth/callback`;
+  const redirectTo = `${appBaseUrl()}/auth/callback`;
   const res = await doFetch(`${url}/auth/v1/signup?redirect_to=${encodeURIComponent(redirectTo)}`, {
     method: 'POST',
     headers: { apikey: anon, authorization: `Bearer ${anon}`, 'content-type': 'application/json' },

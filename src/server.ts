@@ -42,7 +42,7 @@ import { provisionTenant } from './auth/provision.js';
 import { getUser, getSession, verifyAccessToken, ACCESS_COOKIE, REFRESH_COOKIE } from './auth/session.js';
 import { resolveClientForUser, parseCookies } from './auth/tenant.js';
 import { renderOnboardingPage } from './review/onboarding.js';
-import { ingestInboundEmail, parsePostmarkInbound, ensureInboundToken, inboundAddressFor, commonInboundAddress } from './lib/inbound-email.js';
+import { ingestInboundEmail, parsePostmarkInbound, ensureInboundToken, inboundAddressFor, commonInboundAddress, tokenAddressesEnabled } from './lib/inbound-email.js';
 import { extractAndClassify } from './lib/merged.js';
 import { diffExtractions } from './lib/extraction-diff.js';
 import { loadVendorHints, listVendorProfiles, trainVendorProfile } from './lib/vendor-profile.js';
@@ -1068,7 +1068,12 @@ const server = createServer(async (req, res) => {
         pool.query(`select distinct vendor from catalog_mapping where client_id = $1 and coalesce(vendor,'') <> '' order by vendor`, [authedClient]),
       ]);
       const vendors = vend.rows.map((r) => String((r as { vendor: string }).vendor));
-      const inbound = { common: commonInboundAddress(), direct: inboundAddressFor(inboundToken), account: session.user.email };
+      const inbound = {
+        common: commonInboundAddress(),
+        // Only advertise the per-studio address once an inbound domain is actually MX-pointed.
+        direct: tokenAddressesEnabled() ? inboundAddressFor(inboundToken) : '',
+        account: session.user.email,
+      };
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(renderSettingsPage(s, pricing, inbound, { vendors, categories }, conn, url.searchParams.get('square')));
     } catch (err) {

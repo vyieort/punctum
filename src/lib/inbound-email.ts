@@ -23,6 +23,12 @@ export function commonInboundAddress(env: NodeJS.ProcessEnv = process.env): stri
   return env.INBOUND_COMMON_ADDRESS || `invoices@${inboundDomain(env)}`;
 }
 
+/** Per-studio <token>@domain addresses only work when an inbound domain has MX pointed at the mail
+ *  provider. Until INBOUND_EMAIL_DOMAIN is set we must not advertise an address that can't receive. */
+export function tokenAddressesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.INBOUND_EMAIL_DOMAIN);
+}
+
 /** Opaque routing token (lowercase hex, safe in an email local part). */
 export function genInboundToken(): string {
   return randomBytes(10).toString('hex'); // 20 chars, 80 bits
