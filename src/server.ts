@@ -15,7 +15,7 @@ import { runTagsJob, type Queryable } from './jobs/pg-rows.js';
 import { handleReview } from './review/handler.js';
 import { ingestInvoice, queueInvoice, requeueErrored } from './jobs/intake.js';
 import { startWorker } from './jobs/worker.js';
-import { getQueueRows, renderQueuePage, bulkApproveInvoices } from './review/queue.js';
+import { getQueueRows, renderQueuePage, bulkApproveInvoices, deleteQueuedInvoice } from './review/queue.js';
 import { listLocations, getItemImageUrl } from './lib/square-client.js';
 import { previewInvoiceImport } from './jobs/import-preview.js';
 import { provisionCategories } from './jobs/provision-categories.js';
@@ -1798,6 +1798,21 @@ const server = createServer(async (req, res) => {
       sendJson(res, 500, { error: (err as Error).message });
     }
     return;
+  }
+
+  // Delete a queued invoice (+ its lines) before it reaches Square. Tenant-scoped; refuses mid-push
+  // ('importing') and already-pushed ('done'). Path: POST /invoices/:id/delete.
+  {
+    const dp = url.pathname.split('/').filter(Boolean);
+    if (dp[0] === 'invoices' && dp.length === 3 && dp[2] === 'delete' && req.method === 'POST') {
+      try {
+        const r = await deleteQueuedInvoice(getPool() as unknown as Queryable, authedClient, decodeURIComponent(dp[1] as string));
+        sendJson(res, r.deleted ? 200 : 409, r);
+      } catch (err) {
+        sendJson(res, 500, { error: (err as Error).message });
+      }
+      return;
+    }
   }
 
   // Review queue: every invoice with its status + a Review link once ready.

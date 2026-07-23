@@ -71,6 +71,29 @@ export async function bulkApproveInvoices(
   return { approvedIds, skipped };
 }
 
+/**
+ * Remove a queued invoice (and its lines, via cascade) before it reaches Square. Tenant-scoped, and
+ * refuses invoices that are mid-push ('importing') or already pushed ('done') — the status guard in
+ * the DELETE also closes the race where it flips to importing between the check and the delete.
+ * Nothing in Square is touched; this only clears Punctum's queue.
+ */
+export async function deleteQueuedInvoice(
+  db: Queryable,
+  clientId: string,
+  id: string,
+): Promise<{ deleted: boolean; reason?: string }> {
+  const { rows } = await db.query(`select status::text as status from invoices where id = $1 and client_id = $2`, [id, clientId]);
+  if (rows.length === 0) return { deleted: false, reason: 'not found' };
+  const status = String((rows[0] as { status: string }).status);
+  if (status === 'importing') return { deleted: false, reason: 'currently pushing to Square' };
+  if (status === 'done') return { deleted: false, reason: 'already pushed to Square — kept for history' };
+  const del = await db.query(
+    `delete from invoices where id = $1 and client_id = $2 and status not in ('importing','done') returning id`,
+    [id, clientId],
+  );
+  return { deleted: del.rows.length > 0 };
+}
+
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -115,7 +138,10 @@ export function renderQueuePage(rows: QueueRow[]): string {
       // Every row links to its (read-only) review page — so an already-pushed invoice can be
       // reopened to look at, with no approve/reject at that point.
       const linkLabel = r.status === 'in_review' ? 'Review →' : r.status === 'error' ? 'View error' : 'View';
-      const action = `<a class="review" href="/invoices/${esc(r.id)}/review">${linkLabel}</a>`;
+      // Deletable before it's pushed: anything except mid-push ('importing') or already-in-Square ('done').
+      const deletable = r.status !== 'importing' && r.status !== 'done';
+      const del = deletable ? ` <button class="del" data-id="${esc(r.id)}" title="Remove from the queue (does not touch Square)">✕</button>` : '';
+      const action = `<a class="review" href="/invoices/${esc(r.id)}/review">${linkLabel}</a>${del}`;
       const total = r.total ? `$${esc(r.total)}` : '';
       return `<tr>
         <td class="chk">${r.status === 'in_review' ? `<input type="checkbox" class="qchk" data-id="${esc(r.id)}">` : ''}</td>
@@ -149,6 +175,8 @@ ${working ? '<meta http-equiv="refresh" content="8">' : ''}
   td.chk,th.chk{width:26px}
   button.approve{font:inherit;font-size:13px;padding:.3rem .8rem;border:1px solid #166534;background:#166534;color:#fff;border-radius:6px;cursor:pointer;margin-bottom:1rem}
   button.approve:disabled{opacity:.45;cursor:default}
+  button.del{font:inherit;font-size:13px;line-height:1;margin-left:.5rem;padding:.15rem .4rem;border:1px solid #e5e7eb;color:#b91c1c;background:#fff;border-radius:6px;cursor:pointer}
+  button.del:hover{background:#fef2f2;border-color:#fca5a5} button.del:disabled{opacity:.5;cursor:default}
 </style></head>
 <body>
   <h2>Review queue</h2>
@@ -170,6 +198,18 @@ function selectedIds(){ return Array.prototype.map.call(document.querySelectorAl
 function updateApprove(){ var n=selectedIds().length, b=document.getElementById('approvebtn'); if(b){ b.disabled=n===0; b.textContent=n?('Approve '+n+' selected'):'Approve selected'; } }
 document.querySelectorAll('.qchk').forEach(function(c){ c.addEventListener('change', updateApprove); });
 var qall=document.getElementById('qall'); if(qall) qall.addEventListener('change', function(e){ document.querySelectorAll('.qchk').forEach(function(c){ c.checked=e.target.checked; }); updateApprove(); });
+document.querySelectorAll('.del').forEach(function(b){
+  b.addEventListener('click', async function(){
+    if(!confirm('Delete this invoice from the queue? It removes the invoice and its extracted lines here. Nothing in Square is touched.')) return;
+    b.disabled=true;
+    try{
+      var res=await fetch('/invoices/'+encodeURIComponent(b.getAttribute('data-id'))+'/delete',{method:'POST'});
+      var j=await res.json().catch(function(){return {};});
+      if(res.ok && j.deleted){ var tr=b.closest('tr'); if(tr) tr.remove(); }
+      else { alert('Could not delete: '+(j.reason||j.error||res.status)); b.disabled=false; }
+    }catch(e){ alert(e.message); b.disabled=false; }
+  });
+});
 async function approveSelected(){
   var ids=selectedIds(); if(!ids.length) return;
   if(!confirm('Approve '+ids.length+' invoice(s) and push to Square?')) return;
