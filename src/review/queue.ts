@@ -94,6 +94,31 @@ export async function deleteQueuedInvoice(
   return { deleted: del.rows.length > 0 };
 }
 
+/**
+ * Delete several queued invoices at once (the "Delete selected" toolbar action). Tenant-scoped;
+ * each id runs through deleteQueuedInvoice, so mid-push/done rows are skipped rather than deleted.
+ * Returns which ids were actually removed.
+ */
+export async function bulkDeleteInvoices(
+  db: Queryable,
+  clientId: string,
+  ids: string[],
+): Promise<{ deletedIds: string[]; skipped: number }> {
+  const deletedIds: string[] = [];
+  let skipped = 0;
+  for (const id of ids) {
+    let ok = false;
+    try {
+      ok = (await deleteQueuedInvoice(db, clientId, id)).deleted;
+    } catch {
+      ok = false;
+    }
+    if (ok) deletedIds.push(id);
+    else skipped++;
+  }
+  return { deletedIds, skipped };
+}
+
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -130,6 +155,8 @@ export function renderQueuePage(rows: QueueRow[]): string {
     .map(([s, n]) => `${n} ${STATUS_LABEL[s] ?? s}`)
     .join(' · ');
   const inReviewCount = counts.in_review ?? 0;
+  // Deletable before it's pushed: anything except mid-push ('importing') or already-in-Square ('done').
+  const deletableCount = rows.filter((r) => r.status !== 'importing' && r.status !== 'done').length;
 
   const body = rows
     .map((r) => {
@@ -138,20 +165,20 @@ export function renderQueuePage(rows: QueueRow[]): string {
       // Every row links to its (read-only) review page — so an already-pushed invoice can be
       // reopened to look at, with no approve/reject at that point.
       const linkLabel = r.status === 'in_review' ? 'Review →' : r.status === 'error' ? 'View error' : 'View';
-      // Deletable before it's pushed: anything except mid-push ('importing') or already-in-Square ('done').
+      // One checkbox per selectable (deletable) row. data-status lets the toolbar tell how many of
+      // the checked rows can actually be Approved (only in_review) vs Deleted (any checked).
       const deletable = r.status !== 'importing' && r.status !== 'done';
-      const del = deletable ? ` <button class="del" data-id="${esc(r.id)}" title="Remove from the queue (does not touch Square)">✕</button>` : '';
-      const action = `<a class="review" href="/invoices/${esc(r.id)}/review">${linkLabel}</a>${del}`;
+      const chk = deletable ? `<input type="checkbox" class="qchk" data-id="${esc(r.id)}" data-status="${esc(r.status)}">` : '';
       const total = r.total ? `$${esc(r.total)}` : '';
       return `<tr>
-        <td class="chk">${r.status === 'in_review' ? `<input type="checkbox" class="qchk" data-id="${esc(r.id)}">` : ''}</td>
+        <td class="chk">${chk}</td>
         <td>${esc(r.created)}<div class="fn">${esc(r.filename)}</div></td>
         <td>${esc(r.vendor)}</td>
         <td>${esc(r.invoiceNumber)}</td>
         <td class="ctr">${esc(r.lineCount)}</td>
         <td>${total}</td>
         <td><span class="badge" style="background:${color}">${esc(label)}</span></td>
-        <td>${action}</td>
+        <td><a class="review" href="/invoices/${esc(r.id)}/review">${linkLabel}</a></td>
       </tr>`;
     })
     .join('');
@@ -175,17 +202,18 @@ ${working ? '<meta http-equiv="refresh" content="8">' : ''}
   td.chk,th.chk{width:26px}
   button.approve{font:inherit;font-size:13px;padding:.3rem .8rem;border:1px solid #166534;background:#166534;color:#fff;border-radius:6px;cursor:pointer;margin-bottom:1rem}
   button.approve:disabled{opacity:.45;cursor:default}
-  button.del{font:inherit;font-size:13px;line-height:1;margin-left:.5rem;padding:.15rem .4rem;border:1px solid #e5e7eb;color:#b91c1c;background:#fff;border-radius:6px;cursor:pointer}
-  button.del:hover{background:#fef2f2;border-color:#fca5a5} button.del:disabled{opacity:.5;cursor:default}
+  button.danger{font:inherit;font-size:13px;padding:.3rem .8rem;border:1px solid #b91c1c;background:#fff;color:#b91c1c;border-radius:6px;cursor:pointer;margin:0 0 1rem .5rem}
+  button.danger:hover{background:#fef2f2} button.danger:disabled{opacity:.45;cursor:default}
 </style></head>
 <body>
   <h2>Review queue</h2>
   <p class="sub">${rows.length} invoices${countLine ? ' — ' + esc(countLine) : ''}.${working ? ' Refreshing while items extract…' : ''}</p>
   <a class="btn" href="/invoices/batch">+ Upload more invoices</a>
   ${inReviewCount ? '<button class="approve" id="approvebtn" disabled onclick="approveSelected()">Approve selected</button>' : ''}
+  ${deletableCount ? '<button class="danger" id="deletebtn" disabled onclick="deleteSelected()">Delete selected</button>' : ''}
   ${counts.error ? `<button class="retry" onclick="retryErrored(this)">Retry ${counts.error} errored</button>` : ''}
   <table>
-    <thead><tr><th class="chk">${inReviewCount ? '<input type="checkbox" id="qall">' : ''}</th><th>Uploaded</th><th>Vendor</th><th>Invoice #</th><th>Lines</th><th>Total</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th class="chk">${deletableCount ? '<input type="checkbox" id="qall">' : ''}</th><th>Uploaded</th><th>Vendor</th><th>Invoice #</th><th>Lines</th><th>Total</th><th>Status</th><th></th></tr></thead>
     <tbody>${body}</tbody>
   </table>
 <script>
@@ -194,31 +222,35 @@ async function retryErrored(b){
   try{ await fetch('/queue/retry',{method:'POST'}); location.reload(); }
   catch(e){ b.disabled=false; alert(e.message); }
 }
-function selectedIds(){ return Array.prototype.map.call(document.querySelectorAll('.qchk:checked'), function(c){ return c.getAttribute('data-id'); }); }
-function updateApprove(){ var n=selectedIds().length, b=document.getElementById('approvebtn'); if(b){ b.disabled=n===0; b.textContent=n?('Approve '+n+' selected'):'Approve selected'; } }
-document.querySelectorAll('.qchk').forEach(function(c){ c.addEventListener('change', updateApprove); });
-var qall=document.getElementById('qall'); if(qall) qall.addEventListener('change', function(e){ document.querySelectorAll('.qchk').forEach(function(c){ c.checked=e.target.checked; }); updateApprove(); });
-document.querySelectorAll('.del').forEach(function(b){
-  b.addEventListener('click', async function(){
-    if(!confirm('Delete this invoice from the queue? It removes the invoice and its extracted lines here. Nothing in Square is touched.')) return;
-    b.disabled=true;
-    try{
-      var res=await fetch('/invoices/'+encodeURIComponent(b.getAttribute('data-id'))+'/delete',{method:'POST'});
-      var j=await res.json().catch(function(){return {};});
-      if(res.ok && j.deleted){ var tr=b.closest('tr'); if(tr) tr.remove(); }
-      else { alert('Could not delete: '+(j.reason||j.error||res.status)); b.disabled=false; }
-    }catch(e){ alert(e.message); b.disabled=false; }
-  });
-});
+function checkedBoxes(){ return Array.prototype.slice.call(document.querySelectorAll('.qchk:checked')); }
+function selectedIds(){ return checkedBoxes().map(function(c){ return c.getAttribute('data-id'); }); }
+function approvableIds(){ return checkedBoxes().filter(function(c){ return c.getAttribute('data-status')==='in_review'; }).map(function(c){ return c.getAttribute('data-id'); }); }
+function updateButtons(){
+  var sel=selectedIds().length, appr=approvableIds().length;
+  var a=document.getElementById('approvebtn'); if(a){ a.disabled=appr===0; a.textContent=appr?('Approve '+appr+' selected'):'Approve selected'; }
+  var d=document.getElementById('deletebtn'); if(d){ d.disabled=sel===0; d.textContent=sel?('Delete '+sel+' selected'):'Delete selected'; }
+}
+document.querySelectorAll('.qchk').forEach(function(c){ c.addEventListener('change', updateButtons); });
+var qall=document.getElementById('qall'); if(qall) qall.addEventListener('change', function(e){ document.querySelectorAll('.qchk').forEach(function(c){ c.checked=e.target.checked; }); updateButtons(); });
 async function approveSelected(){
-  var ids=selectedIds(); if(!ids.length) return;
+  var ids=approvableIds(); if(!ids.length) return;
   if(!confirm('Approve '+ids.length+' invoice(s) and push to Square?')) return;
   var b=document.getElementById('approvebtn'); b.disabled=true; b.textContent='Approving '+ids.length+'…';
   try{
     var res=await fetch('/queue/approve',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ids:ids})});
     var j=await res.json();
-    if(res.ok){ location.reload(); } else { alert('Error: '+(j.error||res.status)); b.disabled=false; updateApprove(); }
-  }catch(e){ alert(e.message); b.disabled=false; updateApprove(); }
+    if(res.ok){ location.reload(); } else { alert('Error: '+(j.error||res.status)); b.disabled=false; updateButtons(); }
+  }catch(e){ alert(e.message); b.disabled=false; updateButtons(); }
+}
+async function deleteSelected(){
+  var ids=selectedIds(); if(!ids.length) return;
+  if(!confirm('Delete '+ids.length+' invoice(s) from the queue? This removes them and their extracted lines here. Nothing in Square is touched.')) return;
+  var b=document.getElementById('deletebtn'); b.disabled=true; b.textContent='Deleting '+ids.length+'…';
+  try{
+    var res=await fetch('/queue/delete',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ids:ids})});
+    var j=await res.json();
+    if(res.ok){ location.reload(); } else { alert('Error: '+(j.error||res.status)); b.disabled=false; updateButtons(); }
+  }catch(e){ alert(e.message); b.disabled=false; updateButtons(); }
 }
 </script>
 </body></html>`;

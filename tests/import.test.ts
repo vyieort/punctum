@@ -23,6 +23,7 @@ async function seeded(): Promise<PGlite> {
   await db.exec(mig('0009_catalog_edits.sql'));
   await db.exec(mig('0010_invoice_error_detail.sql'));
   await db.exec(mig('0013_line_excluded.sql'));
+  await db.exec(mig('0019_notifications.sql'));
   await db.exec(mig('0020_invoice_push_occurred_at.sql'));
   await db.exec(`insert into clients (id,name) values ('RE','Ritual Evolution')`);
   await db.exec(
@@ -199,6 +200,14 @@ test('a failed push persists error_detail on the invoice (so the review page can
   const detail = JSON.parse(inv.rows[0]!.error_detail ?? '[]') as Array<{ item: string; error: string }>;
   assert.ok(detail.length > 0);
   assert.match(detail[0]!.error, /duplicate SKU/);
+
+  // ...and it raises a client-facing push_failed alert pointing at the invoice.
+  const alerts = await db.query<{ type: string; audience: string; action_url: string }>(
+    `select type, audience, action_url from notifications where client_id='RE' and type='push_failed'`,
+  );
+  assert.equal(alerts.rows.length, 1);
+  assert.equal(alerts.rows[0]!.audience, 'client');
+  assert.match(alerts.rows[0]!.action_url, new RegExp(INV));
 });
 
 test('loadClassifiedProducts skips excluded product lines', async () => {

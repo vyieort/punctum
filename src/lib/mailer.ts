@@ -46,6 +46,12 @@ export function mailerFromEnv(cfg: MailerConfig = {}, env: NodeJS.ProcessEnv = p
   };
 }
 
+/** DeliverOps for the notification pipeline, or undefined when email isn't configured (so callers
+ *  record alerts in-app without a hard dependency on the mailer being set up). */
+export function mailerOps(env: NodeJS.ProcessEnv = process.env): { send: (m: MailMessage) => Promise<{ messageId: string }> } | undefined {
+  return isMailerConfigured(env) ? { send: (m) => sendEmail(m) } : undefined;
+}
+
 export async function sendEmail(msg: MailMessage, cfg: MailerConfig = {}): Promise<{ messageId: string }> {
   const m = mailerFromEnv(cfg);
   const to = Array.isArray(msg.to) ? msg.to.filter(Boolean).join(', ') : msg.to;

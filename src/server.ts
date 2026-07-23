@@ -15,7 +15,7 @@ import { runTagsJob, type Queryable } from './jobs/pg-rows.js';
 import { handleReview } from './review/handler.js';
 import { ingestInvoice, queueInvoice, requeueErrored } from './jobs/intake.js';
 import { startWorker } from './jobs/worker.js';
-import { getQueueRows, renderQueuePage, bulkApproveInvoices, deleteQueuedInvoice } from './review/queue.js';
+import { getQueueRows, renderQueuePage, bulkApproveInvoices, bulkDeleteInvoices } from './review/queue.js';
 import { listLocations, getItemImageUrl } from './lib/square-client.js';
 import { previewInvoiceImport } from './jobs/import-preview.js';
 import { provisionCategories } from './jobs/provision-categories.js';
@@ -43,13 +43,14 @@ import { getUser, getSession, verifyAccessToken, ACCESS_COOKIE, REFRESH_COOKIE }
 import { resolveClientForUser, parseCookies } from './auth/tenant.js';
 import { renderOnboardingPage } from './review/onboarding.js';
 import { ingestInboundEmail, parsePostmarkInbound, ensureInboundToken, inboundAddressFor, commonInboundAddress, tokenAddressesEnabled } from './lib/inbound-email.js';
+import { notifyInboundFailure } from './lib/inbound-followup.js';
 import { extractAndClassify } from './lib/merged.js';
 import { diffExtractions } from './lib/extraction-diff.js';
 import { loadVendorHints, listVendorProfiles, trainVendorProfile } from './lib/vendor-profile.js';
 import { renderVendorsPage } from './review/vendors-page.js';
-import { listNotifications, resolveNotification, tenantHealth, isAdminEmail, adminEmails, type Notification } from './lib/notifications.js';
+import { listNotifications, resolveNotification, tenantHealth, isAdminEmail, adminEmails, startEscalationSweep, type Notification } from './lib/notifications.js';
 import { renderAdminPage } from './review/admin-page.js';
-import { sendEmail, isMailerConfigured } from './lib/mailer.js';
+import { sendEmail, isMailerConfigured, mailerOps } from './lib/mailer.js';
 import { appBaseUrl } from './lib/app-url.js';
 import { maybeCompressPdf } from './lib/pdf-compress.js';
 
@@ -750,6 +751,11 @@ const server = createServer(async (req, res) => {
       const raw = await readBodyBuffer(req);
       const msg = parsePostmarkInbound(JSON.parse(raw.toString('utf8') || '{}'));
       const result = await ingestInboundEmail(getPool() as unknown as Queryable, msg);
+      // A message we couldn't route/queue shouldn't vanish: raise an admin alert and bounce the
+      // sender. Fire-and-forget so the webhook still 200s fast; the follow-up is best-effort inside.
+      if (!result.ok) {
+        void notifyInboundFailure(getPool() as unknown as Queryable, msg, result, mailerOps()).catch(() => {});
+      }
       // Always 200 for a well-understood outcome (even "no match") so the provider doesn't retry a
       // mis-addressed message; a thrown error -> 500 so genuine failures do get retried.
       sendJson(res, 200, result);
@@ -1800,19 +1806,19 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  // Delete a queued invoice (+ its lines) before it reaches Square. Tenant-scoped; refuses mid-push
-  // ('importing') and already-pushed ('done'). Path: POST /invoices/:id/delete.
-  {
-    const dp = url.pathname.split('/').filter(Boolean);
-    if (dp[0] === 'invoices' && dp.length === 3 && dp[2] === 'delete' && req.method === 'POST') {
-      try {
-        const r = await deleteQueuedInvoice(getPool() as unknown as Queryable, authedClient, decodeURIComponent(dp[1] as string));
-        sendJson(res, r.deleted ? 200 : 409, r);
-      } catch (err) {
-        sendJson(res, 500, { error: (err as Error).message });
-      }
-      return;
+  // Delete selected queued invoices (+ their lines) before they reach Square. Tenant-scoped; each id
+  // is skipped if it's mid-push ('importing') or already pushed ('done'). Nothing in Square changes.
+  if (url.pathname === '/queue/delete' && req.method === 'POST') {
+    try {
+      const raw = await readBodyBuffer(req);
+      const { ids } = JSON.parse(raw.toString('utf8') || '{}') as { ids?: string[] };
+      const list = Array.isArray(ids) ? ids : [];
+      const { deletedIds, skipped } = await bulkDeleteInvoices(getPool() as unknown as Queryable, authedClient, list);
+      sendJson(res, 200, { deleted: deletedIds.length, skipped });
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
     }
+    return;
   }
 
   // Review queue: every invoice with its status + a Review link once ready.
@@ -1922,6 +1928,10 @@ server.listen(PORT, () => {
           if (r.recovered.length) console.log(`recovered ${r.recovered.length} stuck import(s)`);
         })
         .catch(() => {});
+      // Escalate client alerts (e.g. push failures) that stay unresolved past the grace window to
+      // the platform admin. Runs immediately, then every 15 min; timer is unref'd.
+      startEscalationSweep(getPool() as unknown as Queryable, mailerOps());
+      console.log('escalation sweep started');
     } catch (err) {
       console.error('batch worker failed to start:', (err as Error).message);
     }

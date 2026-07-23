@@ -15,6 +15,8 @@ import {
   type SquareConfig,
 } from '../lib/square-client.js';
 import { loadSquareConfig } from '../lib/square-account.js';
+import { raiseAndDeliver } from '../lib/notifications.js';
+import { mailerOps } from '../lib/mailer.js';
 import { loadClassifiedProducts, loadPricingRules, loadCategoryMap } from './import-preview.js';
 import { toImportLines } from '../lib/import-map.js';
 import {
@@ -194,10 +196,11 @@ async function runImportInner(
   invoiceId: string,
   opts: ImportOptions = {},
 ): Promise<ImportResult> {
-  const inv = await db.query(`select client_id, vendor, created_at, push_occurred_at from invoices where id = $1`, [invoiceId]);
+  const inv = await db.query(`select client_id, vendor, invoice_number, created_at, push_occurred_at from invoices where id = $1`, [invoiceId]);
   if (inv.rows.length === 0) throw new Error(`invoice ${invoiceId} not found`);
   const clientId = String((inv.rows[0] as { client_id: string }).client_id);
   const vendor = String((inv.rows[0] as { vendor: string | null }).vendor ?? '');
+  const invoiceNumber = String((inv.rows[0] as { invoice_number: string | null }).invoice_number ?? '');
 
   // Square ops come from the connected tenant's stored OAuth token; loadSquareConfig falls back to
   // env for RE (client #1), so imports keep working before any tenant has connected via OAuth.
@@ -344,6 +347,34 @@ async function runImportInner(
     result.errors.length ? 'error' : 'done',
     errorDetail,
   ]);
+
+  // A push that Square (partly) rejected is a failed submission the studio needs to know about, not
+  // just something sitting in the queue as 'error'. Raise a client-facing alert (in-app + emailed to
+  // their notification list) linking straight to the invoice. Deduped per invoice, and fully
+  // best-effort — alerting must never change the import outcome.
+  if (result.errors.length) {
+    try {
+      const label = invoiceNumber || vendor || invoiceId;
+      await raiseAndDeliver(
+        db,
+        {
+          clientId,
+          audience: 'client',
+          source: 'system',
+          type: 'push_failed',
+          severity: 'error',
+          title: `Invoice ${label} didn't fully import to Square`,
+          detail: `${result.errors.length} item(s) were rejected. Open the invoice to see exactly what Square returned.`,
+          context: { invoiceId, vendor, errorCount: result.errors.length, firstError: result.errors[0]?.error ?? '' },
+          actionUrl: `/invoices/${invoiceId}/review`,
+          dedupeKey: `push_failed:${invoiceId}`,
+        },
+        mailerOps(),
+      );
+    } catch {
+      /* alerting is best-effort; the failure is already persisted on the invoice */
+    }
+  }
   return result;
 }
 

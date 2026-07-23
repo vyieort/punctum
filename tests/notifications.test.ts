@@ -8,6 +8,7 @@ import { PGlite } from '@electric-sql/pglite';
 import type { Queryable } from '../src/jobs/pg-rows.js';
 import {
   raiseNotification, listNotifications, resolveNotification, countOpenForClient, tenantHealth, isAdminEmail,
+  escalateStaleAlerts,
 } from '../src/lib/notifications.js';
 
 const mig = (f: string): string => readFileSync(new URL(`../db/migrations/${f}`, import.meta.url), 'utf8');
@@ -16,6 +17,7 @@ async function seeded(): Promise<PGlite> {
   const db = new PGlite();
   await db.exec(mig('0001_init.sql'));
   await db.exec(mig('0019_notifications.sql'));
+  await db.exec(mig('0021_notification_escalated_at.sql'));
   await db.exec(`insert into clients (id,name) values ('acme','Acme Piercing'),('other','Other Studio')`);
   return db;
 }
@@ -94,6 +96,50 @@ test('tenantHealth rolls up open counts per studio, busiest first', async () => 
   assert.equal(health[0]!.clientId, 'acme');
   assert.equal(health[0]!.open, 2);
   assert.equal(health.find((h) => h.clientId === 'other')!.open, 0);
+});
+
+test('escalateStaleAlerts re-raises a stale client alert to admin, exactly once', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  // one stale (8h old) and one fresh (1h old), both open client push_failed
+  await db.query(
+    `insert into notifications (client_id, audience, source, type, severity, title, detail, context, action_url, created_at) values
+      ('acme','client','system','push_failed','error','Old fail','boom','{"invoiceId":"inv-old"}'::jsonb,'/invoices/inv-old/review', now() - interval '8 hours'),
+      ('acme','client','system','push_failed','error','New fail','boom','{"invoiceId":"inv-new"}'::jsonb,'/invoices/inv-new/review', now() - interval '1 hour')`,
+  );
+  const sends: Array<{ to: string[]; subject: string; text: string }> = [];
+  const ops = { send: async (m: { to: string[]; subject: string; text: string }) => { sends.push(m); return {}; } };
+  const env = { ADMIN_EMAILS: 'admin@punctum.app' } as unknown as NodeJS.ProcessEnv;
+
+  const r1 = await escalateStaleAlerts(q, ops, { olderThanMs: 6 * 3600 * 1000 }, env);
+  assert.equal(r1.escalated.length, 1); // only the stale one crossed the window
+
+  const adminAlerts = await listNotifications(q, { audience: 'admin' });
+  assert.equal(adminAlerts.length, 1);
+  assert.equal(adminAlerts[0]!.type, 'escalated_push_failed');
+  assert.match(adminAlerts[0]!.actionUrl, /inv-old/);
+  assert.ok(sends.some((s) => s.to.includes('admin@punctum.app')), 'admin was emailed');
+
+  // idempotent: the original is stamped escalated_at, so a second sweep does nothing
+  const r2 = await escalateStaleAlerts(q, ops, { olderThanMs: 6 * 3600 * 1000 }, env);
+  assert.equal(r2.escalated.length, 0);
+  assert.equal((await listNotifications(q, { audience: 'admin' })).length, 1);
+});
+
+test('escalateStaleAlerts ignores resolved alerts and non-escalatable types', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  await db.query(
+    `insert into notifications (client_id, audience, source, type, severity, title, context, created_at, resolved_at) values
+      ('acme','client','system','push_failed','error','Already handled','{}'::jsonb, now() - interval '2 days', now())`,
+  );
+  await db.query(
+    `insert into notifications (client_id, audience, source, type, severity, title, context, created_at) values
+      ('acme','client','system','new_vendor','info','A new vendor','{}'::jsonb, now() - interval '2 days')`,
+  );
+  const r = await escalateStaleAlerts(q, undefined, { olderThanMs: 6 * 3600 * 1000 });
+  assert.equal(r.escalated.length, 0);
+  assert.equal((await listNotifications(q, { audience: 'admin' })).length, 0);
 });
 
 test('isAdminEmail reads ADMIN_EMAILS and is case/space tolerant', () => {

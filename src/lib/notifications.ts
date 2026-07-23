@@ -187,6 +187,83 @@ export async function tenantHealth(db: Queryable): Promise<Array<{ clientId: str
   });
 }
 
+export interface EscalateOpts {
+  olderThanMs?: number; // grace window before a client alert escalates to admin (default 6h)
+  types?: string[]; // which client alert types escalate (default ['push_failed'])
+  now?: number; // injectable clock for tests
+}
+
+/**
+ * Re-raise to the platform admin any client-facing alert that's still open past the grace window.
+ * The original is stamped escalated_at so it escalates exactly once — this is safe to run on any
+ * cadence. Best-effort delivery (admin email) when `ops` is provided. Returns the ids escalated.
+ */
+export async function escalateStaleAlerts(
+  db: Queryable,
+  ops?: DeliverOps,
+  opts: EscalateOpts = {},
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ escalated: string[] }> {
+  const olderThanMs = opts.olderThanMs ?? 6 * 60 * 60 * 1000;
+  const types = opts.types ?? ['push_failed'];
+  const cutoff = new Date((opts.now ?? Date.now()) - olderThanMs).toISOString();
+  const { rows } = await db.query(
+    `select id, client_id, audience, source, type, severity, title, detail, context, action_url, created_at, resolved_at
+       from notifications
+      where audience = 'client' and resolved_at is null and escalated_at is null
+        and type = any($1) and created_at < $2
+      order by created_at`,
+    [types, cutoff],
+  );
+  const hours = Math.max(1, Math.round(olderThanMs / 3_600_000));
+  const escalated: string[] = [];
+  for (const r of rows) {
+    const n = toNotification(r as Record<string, unknown>);
+    try {
+      await raiseAndDeliver(
+        db,
+        {
+          clientId: n.clientId,
+          audience: 'admin',
+          source: 'system',
+          type: `escalated_${n.type}`,
+          severity: 'error',
+          title: `Unresolved (${hours}h+): ${n.title}`,
+          detail: `Still unresolved after ${hours}h${n.detail ? `. Original: ${n.detail}` : ''}`,
+          context: { ...n.context, originalId: n.id, originalType: n.type, clientId: n.clientId },
+          actionUrl: n.actionUrl,
+          dedupeKey: `escalated:${n.id}`,
+        },
+        ops,
+        env,
+      );
+      await db.query(`update notifications set escalated_at = now() where id = $1`, [n.id]);
+      escalated.push(n.id);
+    } catch {
+      // one bad row shouldn't stall the sweep; it stays un-stamped and retries next pass
+    }
+  }
+  return { escalated };
+}
+
+/** Periodic escalation sweep. Runs once immediately, then on an interval. Timer is unref'd so it
+ *  never keeps the process alive. */
+export function startEscalationSweep(
+  db: Queryable,
+  ops?: DeliverOps,
+  intervalMs = 15 * 60 * 1000,
+  opts: EscalateOpts = {},
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.Timeout {
+  const tick = (): void => {
+    void escalateStaleAlerts(db, ops, opts, env).catch(() => {});
+  };
+  tick();
+  const timer = setInterval(tick, intervalMs);
+  if (typeof timer.unref === 'function') timer.unref();
+  return timer;
+}
+
 /** Platform admin addresses from ADMIN_EMAILS (comma-separated). */
 export function adminEmails(env: NodeJS.ProcessEnv = process.env): string[] {
   return (env.ADMIN_EMAILS ?? '')

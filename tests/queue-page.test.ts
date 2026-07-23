@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import type { Queryable } from '../src/jobs/pg-rows.js';
-import { getQueueRows, renderQueuePage, bulkApproveInvoices, deleteQueuedInvoice } from '../src/review/queue.js';
+import { getQueueRows, renderQueuePage, bulkApproveInvoices, deleteQueuedInvoice, bulkDeleteInvoices } from '../src/review/queue.js';
 
 const mig = (f: string): string => readFileSync(new URL(`../db/migrations/${f}`, import.meta.url), 'utf8');
 
@@ -121,10 +121,34 @@ test('deleteQueuedInvoice refuses mid-push and already-pushed invoices, and is t
   assert.equal(n, 3);
 });
 
-test('renderQueuePage shows a delete button on un-pushed rows but not on importing/done', async () => {
+test('renderQueuePage: a checkbox on every deletable row + a Delete-selected toolbar button', async () => {
   const db = await seeded();
   await db.exec(`insert into invoices (client_id, vendor, invoice_number, status) values
-    ('RE','BVLA','R1','in_review'), ('RE','NEO','I1','importing'), ('RE','ANA','D1','done')`);
+    ('RE','BVLA','R1','in_review'), ('RE','ERR','E1','error'), ('RE','NEO','I1','importing'), ('RE','ANA','D1','done')`);
   const html = renderQueuePage(await getQueueRows(db as unknown as Queryable, 'RE'));
-  assert.equal((html.match(/class="del"/g) ?? []).length, 1); // only the in_review row is deletable
+  // in_review + error are deletable (2); importing + done are not.
+  assert.equal((html.match(/class="qchk"/g) ?? []).length, 2);
+  assert.match(html, /id="deletebtn"/); // toolbar Delete-selected button present
+  assert.match(html, /data-status="error"/); // error rows are now selectable (for delete)
+  assert.doesNotMatch(html, /class="del"/); // no per-row delete buttons anymore
+});
+
+test('bulkDeleteInvoices deletes the deletable ids and skips mid-push/done/other-tenant', async () => {
+  const db = await seeded();
+  await db.exec(`insert into clients (id,name) values ('CX','Client X')`);
+  await db.exec(`insert into invoices (id, client_id, vendor, status) values
+    ('00000000-0000-0000-0000-0000000000d1','RE','BVLA','in_review'),
+    ('00000000-0000-0000-0000-0000000000d2','RE','ERR','error'),
+    ('00000000-0000-0000-0000-0000000000d3','RE','NEO','importing'),
+    ('00000000-0000-0000-0000-0000000000d4','CX','ANA','in_review')`);
+  const r = await bulkDeleteInvoices(db as unknown as Queryable, 'RE', [
+    '00000000-0000-0000-0000-0000000000d1', // RE in_review -> deleted
+    '00000000-0000-0000-0000-0000000000d2', // RE error -> deleted
+    '00000000-0000-0000-0000-0000000000d3', // RE importing -> skipped
+    '00000000-0000-0000-0000-0000000000d4', // other tenant -> skipped
+  ]);
+  assert.deepEqual(r.deletedIds.sort(), ['00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-0000000000d2']);
+  assert.equal(r.skipped, 2);
+  const left = (await db.query(`select id from invoices order by id`)).rows.length;
+  assert.equal(left, 2); // the importing RE row + the CX row survive
 });
