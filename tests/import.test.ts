@@ -23,6 +23,7 @@ async function seeded(): Promise<PGlite> {
   await db.exec(mig('0009_catalog_edits.sql'));
   await db.exec(mig('0010_invoice_error_detail.sql'));
   await db.exec(mig('0013_line_excluded.sql'));
+  await db.exec(mig('0020_invoice_push_occurred_at.sql'));
   await db.exec(`insert into clients (id,name) values ('RE','Ritual Evolution')`);
   await db.exec(
     `insert into client_config (client_id, pricing_rules) values ('RE',
@@ -162,6 +163,27 @@ test('inventory occurred_at is derived from the invoice (deterministic, retry-sa
   assert.equal(new Set(occ).size, 1); // every adjustment shares one timestamp -> a retry sends identical data
   const created = (await db.query<{ c: string }>(`select created_at::text as c from invoices where id=$1`, [INV])).rows[0]!.c;
   assert.equal(new Date(occ[0]!).toISOString(), new Date(created).toISOString());
+});
+
+test('an aged invoice clamps occurred_at into Square 24h window and persists it (retry-stable)', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  // Age the invoice well past Square's 24h inventory-history limit.
+  await db.query(`update invoices set created_at = now() - interval '8 days' where id = $1`, [INV]);
+  const occ: string[] = [];
+  const base = fakeOps({});
+  const ops = { ...base.ops, inventory: async (body: unknown) => { occ.push((body as { changes: Array<{ adjustment: { occurred_at: string } }> }).changes[0]!.adjustment.occurred_at); return {}; } };
+
+  await runImport(q, INV, { ops, locationId: 'LOC' });
+  const ageHours = (Date.now() - new Date(occ[0]!).getTime()) / 3_600_000;
+  assert.ok(ageHours < 24, `occurred_at must be within 24h, was ${ageHours.toFixed(1)}h`);
+
+  // It's persisted, and a later retry reuses the exact value (idempotency-safe).
+  const stored = (await db.query<{ p: string }>(`select push_occurred_at::text as p from invoices where id=$1`, [INV])).rows[0]!.p;
+  assert.ok(stored);
+  occ.length = 0;
+  await runImport(q, INV, { ops, locationId: 'LOC' });
+  assert.equal(new Date(occ[0]!).toISOString(), new Date(stored).toISOString());
 });
 
 test('a failed push persists error_detail on the invoice (so the review page can show it)', async () => {

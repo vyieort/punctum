@@ -50,6 +50,7 @@ import { renderVendorsPage } from './review/vendors-page.js';
 import { listNotifications, resolveNotification, tenantHealth, isAdminEmail, adminEmails, type Notification } from './lib/notifications.js';
 import { renderAdminPage } from './review/admin-page.js';
 import { sendEmail, isMailerConfigured } from './lib/mailer.js';
+import { appBaseUrl } from './lib/app-url.js';
 import { maybeCompressPdf } from './lib/pdf-compress.js';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -866,7 +867,8 @@ const server = createServer(async (req, res) => {
   }
   if (url.pathname === '/logout') {
     res.writeHead(302, {
-      location: '/login',
+      // Absolute, so logging out from the old railway host still lands on the canonical app domain.
+      location: `${appBaseUrl()}/login`,
       'set-cookie': [
         `${ACCESS_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=0`,
         `${REFRESH_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=0`,

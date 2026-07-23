@@ -194,7 +194,7 @@ async function runImportInner(
   invoiceId: string,
   opts: ImportOptions = {},
 ): Promise<ImportResult> {
-  const inv = await db.query(`select client_id, vendor, created_at from invoices where id = $1`, [invoiceId]);
+  const inv = await db.query(`select client_id, vendor, created_at, push_occurred_at from invoices where id = $1`, [invoiceId]);
   if (inv.rows.length === 0) throw new Error(`invoice ${invoiceId} not found`);
   const clientId = String((inv.rows[0] as { client_id: string }).client_id);
   const vendor = String((inv.rows[0] as { vendor: string | null }).vendor ?? '');
@@ -209,12 +209,23 @@ async function runImportInner(
     locationId = locationId ?? cfg.locationId;
   }
   if (!locationId) throw new Error('runImport: no Square location id');
-  // Inventory occurred_at must be DETERMINISTIC per invoice: the inventory idempotency key is
-  // stable (invoice+sku), so a retry has to send identical data or Square rejects it with
-  // IDEMPOTENCY_KEY_REUSED. Deriving it from the invoice's created_at (not new Date()) makes a
-  // retry an idempotent no-op instead of an error.
+  // Inventory occurred_at must be BOTH (a) within Square's 24h history window and (b) identical on
+  // every retry (the idempotency key is invoice+sku, so a retry with a different time is rejected as
+  // IDEMPOTENCY_KEY_REUSED). Deriving it from created_at gave (b) but failed (a) once an invoice
+  // aged past a day. So: reuse the persisted push time if we have one; otherwise clamp the invoice
+  // date up to 12h-ago (comfortably inside the 24h window) and persist it for future retries.
   const createdAt = (inv.rows[0] as { created_at: string | Date }).created_at;
-  const occurredAt = opts.occurredAt ?? new Date(createdAt as string).toISOString();
+  const storedOccurred = (inv.rows[0] as { push_occurred_at?: string | Date | null }).push_occurred_at;
+  let occurredAt: string;
+  if (opts.occurredAt) {
+    occurredAt = opts.occurredAt;
+  } else if (storedOccurred) {
+    occurredAt = new Date(storedOccurred as string).toISOString();
+  } else {
+    const floor = Date.now() - 12 * 60 * 60 * 1000; // 12h ago
+    occurredAt = new Date(Math.max(new Date(createdAt as string).getTime(), floor)).toISOString();
+    await db.query(`update invoices set push_occurred_at = $2 where id = $1`, [invoiceId, occurredAt]);
+  }
 
   const [{ items }, pricingRules, categoryMap] = await Promise.all([
     loadClassifiedProducts(db, invoiceId),
