@@ -67,13 +67,35 @@ test('excluded lines are ignored on both sides', async () => {
   assert.equal(gone.length, 0);
 });
 
-test('isFoldableAddOn separates item add-ons from order fees', () => {
+test('duplicate SKUs: an ambiguous link falls back to adjacency (Anatometal gem-pairing)', async () => {
+  // The same bezel SKU is bought twice, each set with a different gem listed right below it. The
+  // extractor links both gems by that shared SKU (ambiguous), so folding must use adjacency, not
+  // dump both gems onto one bezel.
+  const bezel1 = mk({ sku: 'NC-BEZ', item_name: 'Partial Bezel Navel Curve', description: 'Partial Bezel', price: '43.18' });
+  const gemA = mk({ description: 'Faceted CZ Amethyst 4mm', price: '0.84', is_product: false, folds_into: 'NC-BEZ' });
+  const bezel2 = mk({ sku: 'NC-BEZ', item_name: 'Partial Bezel Navel Curve', description: 'Partial Bezel', price: '43.18' });
+  const gemB = mk({ description: 'Faceted CZ Aurora Borealis 4mm', price: '1.85', is_product: false, folds_into: 'NC-BEZ' });
+
+  const out = foldAddOns([L(bezel1), L(gemA, false), L(bezel2), L(gemB, false)]);
+  assert.equal(out.length, 2);
+  assert.equal(out[0]!.price, '44.02'); // 43.18 + 0.84 (its OWN gem), not both
+  assert.equal(out[1]!.price, '45.03'); // 43.18 + 1.85
+});
+
+test('a keyword-less gem with no link still folds via adjacency (fold-unless-fee)', async () => {
+  const piece = mk({ sku: 'X', description: 'Gem Ball End, Titanium', price: '12.88' });
+  const gem = mk({ description: 'Faceted CZ Brilliant, Champagne, 4mm', price: '1.05', is_product: false }); // no folds_into, no add-on keyword
+  const out = foldAddOns([L(piece), L(gem, false)]);
+  assert.equal(out[0]!.price, '13.93'); // 12.88 + 1.05 — folded, not dropped
+});
+
+test('isFoldableAddOn folds any non-product line except recognized order fees', () => {
   assert.equal(isFoldableAddOn(mk({ description: 'Gold Threaded Add-on' })), true);
   assert.equal(isFoldableAddOn(mk({ description: '2mm CZ Gem' })), true);
-  assert.equal(isFoldableAddOn(mk({ description: 'Gauge Conversion' })), true);
+  assert.equal(isFoldableAddOn(mk({ description: 'Faceted CZ Brilliant, Amethyst, 4mm' })), true); // keyword-less gem still folds
+  assert.equal(isFoldableAddOn(mk({ description: 'Cabochon Synthetic Opal, 5mm' })), true);
   assert.equal(isFoldableAddOn(mk({ description: 'Shipping' })), false);
   assert.equal(isFoldableAddOn(mk({ description: 'Sales Tax' })), false);
   assert.equal(isFoldableAddOn(mk({ description: 'Insurance' })), false);
   assert.equal(isFoldableAddOn(mk({ description: 'anything at all', folds_into: 'X' })), true); // link forces fold
-  assert.equal(isFoldableAddOn(mk({ description: 'Plain widget' })), false);
 });
