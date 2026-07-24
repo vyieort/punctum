@@ -116,26 +116,31 @@ export async function ingestInvoice(
   // Oversized scanned PDFs (e.g. a 20MB NeoMetal scan) are downsampled first so the AI call
   // stays well under the gateway timeout. No-op for normal-sized invoices.
   const { base64: pdfForAi } = await maybeCompressPdf(input.pdfBase64);
-  const merged = await extractWithVendorLearning(db, pdfForAi, extract);
 
-  const inv = await db.query(
-    `insert into invoices (client_id, vendor, invoice_number, invoice_date, total, status, pdf_storage_path, pdf_bytes)
-     values ($1, $2, $3, $4, $5, 'in_review', $6, decode($7, 'base64'))
-     returning id`,
-    [
-      clientId,
-      merged.vendor_name || null,
-      merged.invoice_number || null,
-      merged.invoice_date || null,
-      merged.invoice_total ?? null,
-      input.pdfStoragePath ?? null,
-      pdfForAi, // keep the compressed PDF for the review panel
-    ],
+  // Create the row up front as 'processing' (storing the compressed PDF) so a single upload shows in
+  // the queue with an "Extracting…" status during the synchronous AI call — same as the batch path —
+  // and survives a mid-extract restart (the worker re-queues stranded 'processing' rows on boot).
+  const created = await db.query(
+    `insert into invoices (client_id, status, filename, pdf_storage_path, pdf_bytes)
+       values ($1, 'processing', $2, $3, decode($4, 'base64')) returning id`,
+    [clientId, input.filename ?? null, input.pdfStoragePath ?? null, pdfForAi],
   );
-  const invoiceId = (inv.rows[0] as { id: string }).id;
-  const { lineCount, productCount } = await insertClassifiedLines(db, invoiceId, merged);
+  const invoiceId = (created.rows[0] as { id: string }).id;
 
-  return { invoiceId, vendorName: merged.vendor_name, invoiceNumber: merged.invoice_number, lineCount, productCount };
+  try {
+    const merged = await extractWithVendorLearning(db, pdfForAi, extract);
+    await db.query(
+      `update invoices set vendor = $2, invoice_number = $3, invoice_date = $4, total = $5,
+              status = 'in_review', updated_at = now() where id = $1`,
+      [invoiceId, merged.vendor_name || null, merged.invoice_number || null, merged.invoice_date || null, merged.invoice_total ?? null],
+    );
+    const { lineCount, productCount } = await insertClassifiedLines(db, invoiceId, merged);
+    return { invoiceId, vendorName: merged.vendor_name, invoiceNumber: merged.invoice_number, lineCount, productCount };
+  } catch (e) {
+    // Leave a retryable 'error' row (PDF retained) rather than vanishing — visible in the queue.
+    await db.query(`update invoices set status = 'error', updated_at = now() where id = $1`, [invoiceId]).catch(() => {});
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------- batch queue

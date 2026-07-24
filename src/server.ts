@@ -20,7 +20,7 @@ import { listLocations, getItemImageUrl } from './lib/square-client.js';
 import { previewInvoiceImport } from './jobs/import-preview.js';
 import { provisionCategories } from './jobs/provision-categories.js';
 import { runComparison } from './jobs/compare.js';
-import { runImport, recoverStuckImports } from './jobs/import.js';
+import { runImport, runImportSafely, recoverStuckImports } from './jobs/import.js';
 import { wipeSandboxCatalog } from './jobs/wipe.js';
 import { parseSquareLibraryXlsx } from './lib/library-import.js';
 import { seedLibrary } from './jobs/library-seed.js';
@@ -118,13 +118,15 @@ const UPLOAD_PAGE = `<!doctype html>
 async function up(){
   var el=document.getElementById('f'); var s=document.getElementById('status'); var b=document.getElementById('go');
   if(!el.files||!el.files[0]){ s.textContent='Pick a PDF first.'; return; }
-  var file=el.files[0]; b.disabled=true; s.textContent='Extracting '+file.name+' — this can take a minute…';
+  var file=el.files[0]; b.disabled=true;
+  s.textContent='Extracting '+file.name+" — this can take a minute. It'll open in review automatically when it's ready.";
+  s.insertAdjacentHTML('beforeend',' <a href="/queue">Track it in the queue →</a>');
   try{
     var buf=await file.arrayBuffer();
     var res=await fetch('/invoices/upload?filename='+encodeURIComponent(file.name),{method:'POST',headers:{'content-type':'application/pdf'},body:buf});
     var j=await res.json();
     if(res.ok && j.reviewUrl){ s.textContent='Done — opening review…'; location.href=j.reviewUrl; }
-    else { s.textContent='Error: '+(j.error||res.status); b.disabled=false; }
+    else { s.textContent='Error: '+(j.error||res.status); s.insertAdjacentHTML('beforeend',' — <a href="/queue">see it in the queue to retry</a>'); b.disabled=false; }
   }catch(err){ s.textContent='Error: '+err.message; b.disabled=false; }
 }
 </script>
@@ -1062,6 +1064,18 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+  // Lightweight catalog row count — the grid polls this to notice items imported while it's open.
+  // Uses the same source as the grid so the numbers are directly comparable.
+  if (url.pathname === '/catalog/count' && req.method === 'GET') {
+    try {
+      const rows = await getCatalogRows(getPool() as unknown as Queryable, authedClient);
+      sendJson(res, 200, { count: rows.length });
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
   // Per-client settings (auto-enrich toggle).
   if (url.pathname === '/settings' && req.method === 'GET') {
     try {
@@ -1798,7 +1812,7 @@ const server = createServer(async (req, res) => {
       const list = Array.isArray(ids) ? ids : [];
       const pool = getPool() as unknown as Queryable;
       const { approvedIds, skipped } = await bulkApproveInvoices(pool, client, list);
-      for (const id of approvedIds) void runImport(pool, id).catch(() => {}); // serialized in runImport
+      for (const id of approvedIds) void runImportSafely(pool, id); // serialized in runImport; marks 'error' if it throws (never strands on 'importing')
       sendJson(res, 200, { approved: approvedIds.length, skipped });
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
@@ -1815,6 +1829,21 @@ const server = createServer(async (req, res) => {
       const list = Array.isArray(ids) ? ids : [];
       const { deletedIds, skipped } = await bulkDeleteInvoices(getPool() as unknown as Queryable, authedClient, list);
       sendJson(res, 200, { deleted: deletedIds.length, skipped });
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  // Queue status snapshot (id -> status) — the queue page polls this and reloads only when something
+  // actually changes, so a late status flip (e.g. a push finishing) shows without a manual refresh.
+  if (url.pathname === '/queue/status' && req.method === 'GET') {
+    try {
+      const rows = await getQueueRows(getPool() as unknown as Queryable, authedClient);
+      const statuses: Record<string, string> = {};
+      for (const r of rows) statuses[r.id] = r.status;
+      const working = rows.some((r) => r.status === 'queued' || r.status === 'processing' || r.status === 'importing');
+      sendJson(res, 200, { statuses, working });
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }
@@ -1900,7 +1929,7 @@ const server = createServer(async (req, res) => {
           // BACKGROUND — the operator is redirected immediately and can move on while it runs.
           // The import is idempotent; on failure the invoice lands 'error' (retry from import page).
           await pool.query(`update invoices set status = 'importing', updated_at = now() where id = $1`, [id]);
-          void runImport(pool, id).catch(() => {});
+          void runImportSafely(pool, id); // marks 'error' if the push throws — never strands on 'importing'
         },
         excludedLineIds,
       );

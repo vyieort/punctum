@@ -41,7 +41,7 @@ test('renderQueuePage: Review link when ready, auto-refresh while items are queu
     ('RE',null,null,'queued','anato.pdf')`);
   const html = renderQueuePage(await getQueueRows(db as unknown as Queryable, 'RE'));
   assert.match(html, /\/review">Review/); // ready row gets a Review link
-  assert.match(html, /http-equiv="refresh"/); // still working -> refresh on
+  assert.match(html, /setTimeout\(pollQueue/); // still working -> live polling on
   assert.match(html, /Queued/);
   assert.match(html, /Ready to review/);
 });
@@ -50,7 +50,7 @@ test('no auto-refresh once nothing is queued or processing', async () => {
   const db = await seeded();
   await db.exec(`insert into invoices (client_id, vendor, invoice_number, status) values ('RE','BVLA','INV-1','done')`);
   const html = renderQueuePage(await getQueueRows(db as unknown as Queryable, 'RE'));
-  assert.doesNotMatch(html, /http-equiv="refresh"/);
+  assert.doesNotMatch(html, /setTimeout\(pollQueue/); // nothing processing -> no polling loop
 });
 
 test('renderQueuePage shows bulk-approve controls + checkboxes only on in_review rows', async () => {

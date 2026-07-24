@@ -282,6 +282,7 @@ export function renderCatalogPage(rows: CatalogRow[], categoryPaths: string[] = 
   </div>
   <div id="phototray" hidden></div>
   </div><!-- /stickytop -->
+  <div id="freshbanner" style="display:none;margin:.5rem 0;padding:.5rem .8rem;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;font-size:14px;color:#065f46"></div>
   <div class="tablewrap">
   <table>
     <thead><tr><th><input type="checkbox" id="chkall"></th><th></th><th class="sortable" data-key="item">Item &amp; description</th><th class="sortable" data-key="variation">Variation</th><th class="sortable" data-key="category">Category</th><th class="sortable" data-key="vendor">Vendor</th><th class="sortable" data-key="sku">SKU</th><th class="sortable" data-key="wholesale">Wholesale</th><th class="sortable" data-key="retail">Retail</th><th class="sortable" data-key="status">Status</th><th></th></tr></thead>
@@ -623,6 +624,23 @@ function catSort(key){
   document.querySelectorAll('th.sortable').forEach(function(th){ th.classList.remove('asc','desc'); if(th.getAttribute('data-key')===key) th.classList.add(sortDir>0?'asc':'desc'); });
 }
 document.querySelectorAll('th.sortable').forEach(function(th){ th.addEventListener('click', function(){ catSort(th.getAttribute('data-key')); }); });
+// Freshness: this grid is a snapshot, so items imported while it's open won't appear. Poll the row
+// count and, if it grew, show a banner offering a refresh — we don't auto-reload, which would wipe
+// any unsaved inline edits.
+var INITIAL_COUNT=${rows.length};
+async function pollCatalogCount(){
+  try{
+    var r=await fetch('/catalog/count').then(function(x){return x.json();});
+    if(typeof r.count==='number' && r.count>INITIAL_COUNT){
+      var n=r.count-INITIAL_COUNT, b=document.getElementById('freshbanner');
+      b.innerHTML=n+' new item'+(n>1?'s':'')+' imported since you opened this. <a href="/catalog">Refresh to see '+(n>1?'them':'it')+' →</a>';
+      b.style.display='';
+      return; // stop once shown
+    }
+  }catch(e){}
+  setTimeout(pollCatalogCount, 15000);
+}
+setTimeout(pollCatalogCount, 15000);
 </script>
 </body></html>`;
 }

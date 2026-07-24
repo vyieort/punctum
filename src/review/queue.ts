@@ -186,7 +186,6 @@ export function renderQueuePage(rows: QueueRow[]): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Review queue</title>
-${working ? '<meta http-equiv="refresh" content="8">' : ''}
 <style>
   body{font-family:system-ui,-apple-system,sans-serif;margin:1.5rem auto;max-width:1000px;color:#1a1a1a;padding:0 1rem}
   h2{margin:0 0 .25rem} .sub{color:#555;margin:0 0 1rem;font-size:14px}
@@ -207,7 +206,7 @@ ${working ? '<meta http-equiv="refresh" content="8">' : ''}
 </style></head>
 <body>
   <h2>Review queue</h2>
-  <p class="sub">${rows.length} invoices${countLine ? ' — ' + esc(countLine) : ''}.${working ? ' Refreshing while items extract…' : ''}</p>
+  <p class="sub">${rows.length} invoices${countLine ? ' — ' + esc(countLine) : ''}.${working ? ' Auto-updating while items process…' : ''}</p>
   <a class="btn" href="/invoices/batch">+ Upload more invoices</a>
   ${inReviewCount ? '<button class="approve" id="approvebtn" disabled onclick="approveSelected()">Approve selected</button>' : ''}
   ${deletableCount ? '<button class="danger" id="deletebtn" disabled onclick="deleteSelected()">Delete selected</button>' : ''}
@@ -252,6 +251,25 @@ async function deleteSelected(){
     if(res.ok){ location.reload(); } else { alert('Error: '+(j.error||res.status)); b.disabled=false; updateButtons(); }
   }catch(e){ alert(e.message); b.disabled=false; updateButtons(); }
 }
+${working ? `
+// Live status: poll a lightweight snapshot and reload ONLY when a status actually changes (a push
+// finishing, an extract completing) — so the queue never sits stale, without blindly reloading every
+// few seconds. Only emitted while something is processing; stops once everything is terminal.
+var KNOWN=${JSON.stringify(Object.fromEntries(rows.map((r) => [r.id, r.status])))};
+function qChanged(cur){
+  for(var id in cur){ if(KNOWN[id]!==cur[id]) return true; }
+  for(var id in KNOWN){ if(!(id in cur)) return true; } // a row was removed (deleted elsewhere)
+  return false;
+}
+async function pollQueue(){
+  try{
+    var r=await fetch('/queue/status').then(function(x){return x.json();});
+    if(qChanged(r.statuses||{})){ location.reload(); return; }
+    if(r.working){ setTimeout(pollQueue, 4000); }
+  }catch(e){ setTimeout(pollQueue, 8000); }
+}
+setTimeout(pollQueue, 4000);
+` : ''}
 </script>
 </body></html>`;
 }

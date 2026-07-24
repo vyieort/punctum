@@ -191,6 +191,31 @@ export function runImport(db: Queryable, invoiceId: string, opts: ImportOptions 
   return withImportLock(() => runImportInner(db, invoiceId, opts));
 }
 
+/**
+ * runImport that can never strand an invoice on 'importing'. The approve path fires the push in the
+ * background; if it throws BEFORE recording a per-item result (a pre-flight load/plan error, or an
+ * unexpected exception), the invoice would otherwise sit on 'importing' ("Pushing…") forever. Here we
+ * catch that and mark it 'error' — retryable and visible in the queue — with the message. `run` is
+ * injectable for tests.
+ */
+export async function runImportSafely(
+  db: Queryable,
+  invoiceId: string,
+  run: (db: Queryable, invoiceId: string) => Promise<unknown> = (d, id) => runImport(d, id),
+): Promise<void> {
+  try {
+    await run(db, invoiceId);
+  } catch (e) {
+    await db
+      .query(
+        `update invoices set status = 'error', error_detail = $2, updated_at = now()
+           where id = $1 and status = 'importing'`,
+        [invoiceId, JSON.stringify([{ item: '(import)', error: (e as Error).message }])],
+      )
+      .catch(() => {});
+  }
+}
+
 async function runImportInner(
   db: Queryable,
   invoiceId: string,

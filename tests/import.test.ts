@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import type { Queryable } from '../src/jobs/pg-rows.js';
-import { runImport, recoverStuckImports, type SquareOps } from '../src/jobs/import.js';
+import { runImport, runImportSafely, recoverStuckImports, type SquareOps } from '../src/jobs/import.js';
 import { loadClassifiedProducts } from '../src/jobs/import-preview.js';
 import { markLinesExcluded } from '../src/review/store.js';
 
@@ -185,6 +185,18 @@ test('an aged invoice clamps occurred_at into Square 24h window and persists it 
   occ.length = 0;
   await runImport(q, INV, { ops, locationId: 'LOC' });
   assert.equal(new Date(occ[0]!).toISOString(), new Date(stored).toISOString());
+});
+
+test('runImportSafely marks a throwing import as error instead of stranding it on importing', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  const STUCK = '00000000-0000-0000-0000-00000000f001';
+  await db.exec(`insert into invoices (id, client_id, vendor, status) values ('${STUCK}','RE','Anatometal','importing')`);
+  // Simulate runImport throwing BEFORE it records a per-item result (e.g. a pre-flight plan error).
+  await runImportSafely(q, STUCK, async () => { throw new Error('boom before per-item loop'); });
+  const inv = await db.query<{ status: string; error_detail: string | null }>(`select status, error_detail from invoices where id = $1`, [STUCK]);
+  assert.equal(inv.rows[0]!.status, 'error'); // no longer stuck on 'importing'
+  assert.match(inv.rows[0]!.error_detail ?? '', /boom before per-item loop/);
 });
 
 test('a failed push persists error_detail on the invoice (so the review page can show it)', async () => {

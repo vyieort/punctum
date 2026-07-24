@@ -18,6 +18,8 @@ async function seeded(): Promise<PGlite> {
   await db.exec(mig('0001_init.sql'));
   await db.exec(mig('0002_invoice_needs_review.sql'));
   await db.exec(mig('0003_line_classification.sql'));
+  await db.exec(mig('0006_status_queued.sql'));
+  await db.exec(mig('0007_status_processing.sql'));
   await db.exec(mig('0008_invoice_queue_cols.sql'));
   await db.exec(mig('0018_vendor_profiles.sql'));
   await db.exec(mig('0022_vendor_profiles_shared_schema.sql')); // resolves the 0001/0018 collision
@@ -111,15 +113,18 @@ test('an untrained vendor stays single-pass (no wasted second call)', async () =
   assert.equal(inv.rows[0]!.invoice_number, 'INV-9');
 });
 
-test('a failed extraction throws and writes no invoice row', async () => {
+test('a failed extraction surfaces the error and leaves a retryable error row', async () => {
   const db = await seeded();
   const q = db as unknown as Queryable;
   await assert.rejects(
-    () => ingestInvoice(q, 'RE', { pdfBase64: 'x' }, async () => {
+    () => ingestInvoice(q, 'RE', { pdfBase64: 'Zm9v' }, async () => {
       throw new Error('Merged parse failed: boom');
     }),
     /parse failed/,
   );
-  const c = await db.query<{ n: number }>(`select count(*)::int as n from invoices`);
-  assert.equal(c.rows[0]!.n, 0);
+  // The row is created up front (so it shows in the queue while extracting); a failure now leaves it
+  // as 'error' — visible and retryable — instead of vanishing.
+  const rows = await db.query<{ status: string }>(`select status from invoices`);
+  assert.equal(rows.rows.length, 1);
+  assert.equal(rows.rows[0]!.status, 'error');
 });
