@@ -50,5 +50,5 @@ RULES:
   - For items with no gem (shafts, posts, barbells, balls, disks), set gems to empty string.`;
 
 export const EXTRACTION_USER_TEXT = 'Extract all data from this invoice.';
-export const EXTRACTION_MODEL = 'claude-sonnet-4-6';
+export const EXTRACTION_MODEL = process.env.EXTRACT_MODEL || 'claude-sonnet-5';
 export const EXTRACTION_MAX_TOKENS = 16384;

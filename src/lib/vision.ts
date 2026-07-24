@@ -7,7 +7,8 @@
 import { anthropicText, type AnthropicOptions } from './anthropic.js';
 import type { ImageCandidate } from './serpapi.js';
 
-export const VISION_MODEL = 'claude-sonnet-4-6';
+// Image-match model (separate task from invoice text). Override with VISION_MODEL to roll back.
+export const VISION_MODEL = process.env.VISION_MODEL || 'claude-sonnet-5';
 export const VISION_MAX_TOKENS = 200;
 export const MIN_CONFIDENCE = 5;
 

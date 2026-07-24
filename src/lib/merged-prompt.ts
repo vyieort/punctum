@@ -8,7 +8,9 @@
 import { EXTRACTION_PROMPT } from './prompt.js';
 import { CLASSIFY_PROMPT } from './classify-prompt.js';
 
-export const MERGED_MODEL = 'claude-sonnet-4-6';
+// Live single-pass extraction+classification model. Override with EXTRACT_MODEL to A/B or roll back
+// (e.g. EXTRACT_MODEL=claude-sonnet-4-6) without a code change.
+export const MERGED_MODEL = process.env.EXTRACT_MODEL || 'claude-sonnet-5';
 export const MERGED_MAX_TOKENS = 32768;
 
 export const MERGED_PROMPT = `You are a single-pass invoice extraction AND classification system for a body piercing jewelry shop. Read the invoice PDF and return ONE JSON object in which each line item carries BOTH its extracted invoice data AND its catalog classification.

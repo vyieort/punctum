@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 
 export const CLASSIFY_PROMPT = readFileSync(new URL('./classify-prompt.txt', import.meta.url), 'utf8');
 
-export const CLASSIFY_MODEL = 'claude-sonnet-4-6';
+export const CLASSIFY_MODEL = process.env.EXTRACT_MODEL || 'claude-sonnet-5';
 export const CLASSIFY_MAX_TOKENS = 32768;
 
 // The classifier is fed one pipe-delimited row per line item:
