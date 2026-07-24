@@ -5,7 +5,7 @@
 // Set APP_BASE_URL in the environment; the fallback below is only for local/unset cases. When the
 // custom domain is live, change the fallback here (one line) rather than in each caller.
 
-const FALLBACK = 'https://punctum-production.up.railway.app';
+const FALLBACK = 'https://app.getpunctum.com';
 
 export function appBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   return (env.APP_BASE_URL || FALLBACK).replace(/\/$/, '');
