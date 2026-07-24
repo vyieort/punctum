@@ -48,6 +48,7 @@ export interface ClassifiedItem {
   orientation: string;
   is_product?: boolean; // present in the merged single-pass output
   back_order?: string | null;
+  folds_into?: string | null; // #32: on an add-on line, the parent product's SKU (or description) whose price it folds into
   [key: string]: unknown;
 }
 
