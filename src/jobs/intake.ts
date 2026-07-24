@@ -15,10 +15,40 @@ import { fillSkus } from '../lib/sku.js';
 import { extractAndClassify, type MergedInvoice } from '../lib/merged.js';
 import { maybeCompressPdf } from '../lib/pdf-compress.js';
 import { normalizeClassification } from '../lib/normalize.js';
+import { loadVendorHints } from '../lib/vendor-profile.js';
 import type { ClassifiedItem } from '../lib/classify.js';
 import type { AnthropicOptions } from '../lib/anthropic.js';
 
-export type Extractor = (pdfBase64: string, opts?: AnthropicOptions) => Promise<MergedInvoice>;
+export type Extractor = (pdfBase64: string, opts?: AnthropicOptions, vendorHints?: string) => Promise<MergedInvoice>;
+
+/**
+ * Extract once, then — if the vendor we just discovered has learned guidance — re-extract WITH that
+ * vendor's hints and use the hinted reading. The vendor isn't known until the first parse, which is
+ * why this is two-pass; an untrained vendor (no profile / empty hints) costs a single call. The PDF
+ * block is prompt-cached (see merged.ts), so the second pass is cheap. Any failure loading hints or
+ * on the hinted pass falls back to the clean first parse, so learning can never break intake.
+ */
+export async function extractWithVendorLearning(
+  db: Queryable,
+  pdfB64: string,
+  extract: Extractor = extractAndClassify,
+): Promise<MergedInvoice> {
+  const first = await extract(pdfB64);
+  const vendor = (first.vendor_name || '').trim();
+  if (!vendor) return first;
+  let hints = '';
+  try {
+    hints = await loadVendorHints(db, vendor);
+  } catch {
+    hints = ''; // no profile table / lookup error -> treat as untrained
+  }
+  if (!hints.trim()) return first;
+  try {
+    return await extract(pdfB64, undefined, hints);
+  } catch {
+    return first; // hinted pass failed -> keep the clean first parse
+  }
+}
 
 export interface IngestInput {
   pdfBase64: string;
@@ -86,7 +116,7 @@ export async function ingestInvoice(
   // Oversized scanned PDFs (e.g. a 20MB NeoMetal scan) are downsampled first so the AI call
   // stays well under the gateway timeout. No-op for normal-sized invoices.
   const { base64: pdfForAi } = await maybeCompressPdf(input.pdfBase64);
-  const merged = await extract(pdfForAi);
+  const merged = await extractWithVendorLearning(db, pdfForAi, extract);
 
   const inv = await db.query(
     `insert into invoices (client_id, vendor, invoice_number, invoice_date, total, status, pdf_storage_path, pdf_bytes)
@@ -158,7 +188,7 @@ export async function processQueuedInvoice(
   const cleanB64 = pdfB64.replace(/\s+/g, '');
 
   try {
-    const merged = await extract(cleanB64); // the stored PDF is already compressed
+    const merged = await extractWithVendorLearning(db, cleanB64, extract); // the stored PDF is already compressed
     await db.query(
       `update invoices set vendor = $2, invoice_number = $3, invoice_date = $4, total = $5,
               status = 'in_review', updated_at = now()

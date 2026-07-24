@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import type { Queryable } from '../src/jobs/pg-rows.js';
-import { ingestInvoice } from '../src/jobs/intake.js';
+import { ingestInvoice, type Extractor } from '../src/jobs/intake.js';
+import { upsertVendorProfile } from '../src/lib/vendor-profile.js';
 import type { MergedInvoice } from '../src/lib/merged.js';
 import type { ClassifiedItem } from '../src/lib/classify.js';
 
@@ -18,6 +19,8 @@ async function seeded(): Promise<PGlite> {
   await db.exec(mig('0002_invoice_needs_review.sql'));
   await db.exec(mig('0003_line_classification.sql'));
   await db.exec(mig('0008_invoice_queue_cols.sql'));
+  await db.exec(mig('0018_vendor_profiles.sql'));
+  await db.exec(mig('0022_vendor_profiles_shared_schema.sql')); // resolves the 0001/0018 collision
   await db.exec(`insert into clients (id,name) values ('RE','Ritual Evolution')`);
   return db;
 }
@@ -71,6 +74,41 @@ test('ingestInvoice writes invoice + all lines, fills SKUs, stores classificatio
   assert.equal(lines.rows[1]!.backorder, true); // back_order 'YES' -> true
   assert.equal(lines.rows[1]!.item_name, '14G Threadless Ball');
   assert.equal(lines.rows[2]!.is_product, false); // Shipping stored, flagged non-product
+});
+
+test('a trained vendor triggers a second, hint-guided pass whose reading is what gets stored', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  // BVLA has learned guidance, so the vendor discovered in pass 1 should trigger a hinted pass 2.
+  await upsertVendorProfile(q, { vendorName: 'BVLA', guidance: 'Conch seam rings: orientation goes in the variation name.' });
+
+  const FIRST: MergedInvoice = { ...MERGED, invoice_number: 'FIRST' };
+  const HINTED: MergedInvoice = { ...MERGED, invoice_number: 'HINTED' };
+  let calls = 0;
+  const extractor: Extractor = async (_pdf, _opts, hints) => {
+    calls++;
+    return hints && hints.trim() ? HINTED : FIRST;
+  };
+
+  const r = await ingestInvoice(q, 'RE', { pdfBase64: 'Zm9v' }, extractor);
+  assert.equal(calls, 2); // pass 1 discovers BVLA, pass 2 re-reads with its hints
+  const inv = await db.query<{ invoice_number: string }>(`select invoice_number from invoices where id = $1`, [r.invoiceId]);
+  assert.equal(inv.rows[0]!.invoice_number, 'HINTED'); // the hinted reading is the one persisted
+});
+
+test('an untrained vendor stays single-pass (no wasted second call)', async () => {
+  const db = await seeded();
+  const q = db as unknown as Queryable;
+  let calls = 0;
+  const extractor: Extractor = async (_pdf, _opts, hints) => {
+    calls++;
+    return hints && hints.trim() ? { ...MERGED, invoice_number: 'HINTED' } : MERGED;
+  };
+
+  const r = await ingestInvoice(q, 'RE', { pdfBase64: 'Zm9v' }, extractor);
+  assert.equal(calls, 1); // no profile for BVLA -> no second pass
+  const inv = await db.query<{ invoice_number: string }>(`select invoice_number from invoices where id = $1`, [r.invoiceId]);
+  assert.equal(inv.rows[0]!.invoice_number, 'INV-9');
 });
 
 test('a failed extraction throws and writes no invoice row', async () => {
